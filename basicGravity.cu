@@ -10,8 +10,12 @@ extern "C" {
     #include "inputOutput.h"
 }
 
-#define cpuNThreadsVal 1048576
+#include "tree.h"
+#include "sorting.h"
+
+
 #define THREADCOARSENING 2
+#define THREADPERBLOCK 256
 
 // Helper function
 vec3* randomGen(int lower, int upper, size_t N) {
@@ -42,8 +46,8 @@ __global__ void forceCalc(const float4* __restrict__ positionMassArray, vec3 (*a
     int threadTaskMapping = blockIdx.x * blockDim.x * THREADCOARSENING + threadIdx.x;
 
     if (threadTaskMapping + ((THREADCOARSENING - 1) * blockDim.x) > nThreads-1) {
-        int threadNum = blockIdx.x * blockDim.x + threadIdx.x;
-        printf("Thread number: %d, was caught.\n", threadNum);
+        //int threadNum = blockIdx.x * blockDim.x + threadIdx.x;
+        //printf("Thread number: %d, was caught.\n", threadNum);
         return;
     }
 
@@ -88,6 +92,9 @@ __global__ void forceCalc(const float4* __restrict__ positionMassArray, vec3 (*a
     }
 }
 
+
+
+
 // Symplectic euler, update velocity then position
 __global__ void integrateStep( float4 (*positionArray),vec3 (*velocityArray),vec3 (*accelArray), int nThreads, float dt){
     int threadNum = blockDim.x * blockIdx.x + threadIdx.x;
@@ -117,34 +124,58 @@ __global__ void threadPrinter(int* nThreads) {
     printf("Thread number: %d\n", threadNum);
 }
 
+int roundNumberToMultiple(int number, int multiple) {
+    if (multiple == 0) {
+        return number;
+    }
+    if (multiple < 0) {
+        printf("Rounding up to a negative number is undefined (i.e. you probably made an error by even requesting this)\n");
+        exit(-1);
+    }
 
-void progressPrinter(int tSteps, int currentStep, int width) {
-    double percentageVal = (double) currentStep / (tSteps) * 100;
+    int remainder = number % multiple;
+    if (remainder == 0){ // If so then the number is already a multiple
+        return number;
+    }
+    return number + multiple - remainder;
 
-    char filledBar[] = {"||||||||||||||||||||||||||||||||||||||||"};
-    char emptyBar[] = {"----------------------------------------"};
+}
 
-    // Width of the filled bar
-    int filledWidth = (int) (percentageVal / 100 * width);
-    int emptyPad = width - filledWidth;
-    
-    // Write emptry bar
-    fprintf(stdout,"%.s", emptyBar);
+void threadSizeCalc(int* forceBlocks, int* integrateBlocks, int* paddedStarCount, int starCount) {
+    int threadsPerForceBlock = THREADCOARSENING * THREADPERBLOCK;
+    int threadsPerIntegrationBlock = THREADPERBLOCK;
 
-    // Write filled bar
-    fprintf(stdout,"\r %5.2f%% [%.*s%.*s] tStep: %5.d / %d", percentageVal, filledWidth, filledBar, emptyPad, emptyBar, currentStep, tSteps);
-    fflush(stdout);
+    int forceBlockNum = -1;
+    int integrateBlockNum = -1;
+
+    // Force block calculator
+    if (starCount % threadsPerForceBlock == 0) {
+        forceBlockNum = starCount/threadsPerForceBlock;
+    }
+    else {
+        forceBlockNum = (starCount/threadsPerForceBlock) + 1;
+    }
+
+    // Integration block calculator
+    if (starCount % threadsPerIntegrationBlock == 0) {
+        integrateBlockNum = starCount/threadsPerIntegrationBlock;
+    }
+    else {
+        integrateBlockNum = (starCount/threadsPerIntegrationBlock) + 1;
+    }
+    *forceBlocks = forceBlockNum;
+    *integrateBlocks = integrateBlockNum;
+    *paddedStarCount = roundNumberToMultiple(starCount,threadsPerForceBlock);
 }
 
 int main(void) {
     //int cpuNThreads = 256;
-    int tSteps = 1000;
-    int cpuNThreads = cpuNThreadsVal;
+    int tSteps = 4000;
+    int starCount = 40;
     int framesPerWrite = 20;
 
-    size_t starCount = cpuNThreadsVal;
+    // Size of star box
 
-    int threadsPerBlock = 256;
     /*
     Calculate the number of blocks to allocate to the calculations. 
     Since force calculation is just a memory read, a memory write and a bunch of repeated calculations. We can save processor time by performing
@@ -154,22 +185,18 @@ int main(void) {
     On the other hand the integration is mainly limited by the memory access time, so that is unecessary. So therefore we use different block counts for both in order to support
     the thread coarsening I implemented.
     */
-    int forceBlocks = cpuNThreads / (threadsPerBlock * THREADCOARSENING);
-    int integrateBlocks = cpuNThreads / (threadsPerBlock);
+    int forceBlocks, integrateBlocks, paddedStarCount;
+
+    threadSizeCalc(&forceBlocks,&integrateBlocks,&paddedStarCount,starCount);
 
     printf("Blocks allocated for force calculation: %d/80\n",forceBlocks);
     printf("Blocks allocated for integration calculation: %d/80\n",integrateBlocks);
-    printf("Total number of threads for force calculation: %d\n", cpuNThreads/THREADCOARSENING);
-    printf("Threads per block: %d\n", threadsPerBlock);
+    printf("Total number of threads for force calculation: %d\n", starCount/THREADCOARSENING);
+    printf("Threads per block: %d\n", THREADPERBLOCK);
+    printf("Star count: %d, Padded star count: %d.\n",starCount, paddedStarCount);
     
-    unsigned long int NSquared = ((unsigned long int)cpuNThreadsVal*(unsigned long int)cpuNThreadsVal);
+    unsigned long int NSquared = ((unsigned long int)starCount*(unsigned long int)starCount);
     printf("\nInteractions total: %lu\n\n", (long int)tSteps * NSquared);
-
-    if (cpuNThreads % (threadsPerBlock * THREADCOARSENING) != 0) {
-        printf("ERROR: Number of stars is not cleanly divisible into threads\n");
-        printf("I have not implemented the fix for this yet");
-        exit(-1);
-    }
 
     // Put parameters and constants in array;
     float G = 50.0;
@@ -183,15 +210,22 @@ int main(void) {
 
 
     // Creates other arrays
-    vec3* cpuVelocityVals = (vec3*)calloc(cpuNThreadsVal, sizeof(vec3));
-    vec3* cpuAccelerationVals = (vec3*)calloc(cpuNThreadsVal, sizeof(vec3));
+    vec3* cpuVelocityVals = (vec3*)calloc(paddedStarCount, sizeof(vec3));
+    vec3* cpuAccelerationVals = (vec3*)calloc(paddedStarCount, sizeof(vec3));
 
-    float* cpuMassVals = (float*)calloc(cpuNThreads,sizeof(float));
+    float* cpuMassVals = (float*)calloc(paddedStarCount,sizeof(float));
 
     // Initialise arrays
-    for (int i = 0; i < cpuNThreads; i++) {
+    for (int i = 0; i < (int) starCount; i++) {
         cpuMassVals[i] = 2.0;
 
+        cpuVelocityVals[i] = (vec3) {0.0,0.0,0.0};
+        cpuAccelerationVals[i] = (vec3) {0.0,0.0,0.0};
+    }
+
+    // Padd out the empty arrays with zeros
+    for (int i = starCount; i < paddedStarCount; i++) {
+        cpuMassVals[i] = 0.0;
         cpuVelocityVals[i] = (vec3) {0.0,0.0,0.0};
         cpuAccelerationVals[i] = (vec3) {0.0,0.0,0.0};
     }
@@ -200,14 +234,14 @@ int main(void) {
     /*
      Since GPU's are optimised to load 16 bytes of memory at a go, I pack the mass with the position to hopefully take advantage of this
     */
-    float4* cpuPositionMassVals = (float4*)calloc(cpuNThreadsVal,sizeof(float4));
+    float4* cpuPositionMassVals = (float4*)calloc(paddedStarCount,sizeof(float4));
     // Generates position data
     //vec3* cpuPositionVals = (vec3*)calloc(cpuNThreadsVal, sizeof(vec3));
 
     // Turn pointer of array into array to make code more consistent
 
-    vec3* posPtr = randomGen(-4000,4000,cpuNThreads);
-    for (int i = 0; i < cpuNThreads; i++) {
+    vec3* posPtr = randomGen(-400,400,paddedStarCount);
+    for (int i = 0; i < paddedStarCount; i++) {
         cpuPositionMassVals[i] = {posPtr[i].x,posPtr[i].y,posPtr[i].z,cpuMassVals[i]};
     }
     free(posPtr);
@@ -223,9 +257,10 @@ int main(void) {
     vec3* cudaAccelerationVals = 0;
 
     // Allocate memory on GPU
-    size_t posSize = sizeof(cpuPositionMassVals[0]) * cpuNThreadsVal;
-    size_t velSize = sizeof(cpuVelocityVals[0]) * cpuNThreadsVal;
-    size_t accelSize = sizeof(cpuAccelerationVals[0]) * cpuNThreadsVal;
+    size_t posSize = sizeof(cpuPositionMassVals[0]) * paddedStarCount;
+    size_t unpaddedPosSize = sizeof(cpuPositionMassVals[0]) * starCount;
+    size_t velSize = sizeof(cpuVelocityVals[0]) * paddedStarCount;
+    size_t accelSize = sizeof(cpuAccelerationVals[0]) * paddedStarCount;
 
     printf("Memory allocated to following arrays (in bytes):\n\n\tPosition: %zu\n\tVelocity: %zu\n\tAcceleration: %zu\n",posSize,velSize,accelSize);
     fflush(stdout);
@@ -258,10 +293,6 @@ int main(void) {
     //<<<Number of blocks, Number of threads per block>>>
     //threadPrinter<<<numBlocks,threadsPerBlock>>>(cudaNThreads);
 
-    for (int i = 0; i < cpuNThreads; i++) {
-        //printf("Position of particle before running %d: (%f,%f,%f)\n",i,cpuPositionVals[i].x,cpuPositionVals[i].y,cpuPositionVals[i].z);
-    }
-
     // File writing prequisites
     FILE *fptr;
     fptr = fopen("outputDump.bin","wb");
@@ -273,16 +304,18 @@ int main(void) {
 
 
     // Write rendering information to file
-    fwrite(&cpuNThreads,sizeof(cpuNThreads),1,fptr);
+    fwrite(&starCount,sizeof(starCount),1,fptr);
     int writeSteps = (tSteps/framesPerWrite);
     fwrite(&writeSteps,sizeof(writeSteps),1,fptr);
 
+    printf("Write frames: %d\n", writeSteps);
+
     // Write temporary colour vals to file
-    RGB* colourVals = (RGB*)calloc(cpuNThreadsVal, sizeof(RGB));
-    for (int i = 0; i < cpuNThreads; i++) {
+    RGB* colourVals = (RGB*)calloc(starCount, sizeof(RGB));
+    for (int i = 0; i < (int) starCount; i++) {
         colourVals[i] = {100,100,100};
     }
-    fwrite(colourVals, sizeof(colourVals[0]),cpuNThreadsVal,fptr);
+    fwrite(colourVals, sizeof(colourVals[0]),starCount,fptr);
 
     printf("Size of colour vals: %zu\n\n\n", sizeof(colourVals));
 
@@ -293,20 +326,52 @@ int main(void) {
         printf("ERROR: frameBuffer pointer is Null\n");
         exit(-1);
     }
-    for (int i = 0; i < (int)starCount*3; i++) {
+    for (int i = 0; i < starCount*3; i++) {
         frameBuffer[i] = 0.0;
     }
 
     // Output initial couple of values
 
-    printf("\n NThreadsVal: (%d)\n", cpuNThreadsVal);
+    printf("\nNumber of stars: (%d)\n", (int) starCount);
 
     printf("Started to calculate force\n");
 
     // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
-    // CUDA performance profiling
+    // Morton coding test
     // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
-    
+
+    worldBox rootBox;
+    rootBox.minX = 0.0; rootBox.minY = 0.0; rootBox.minZ = 0.0;
+    rootBox.scale = 1.0;
+
+    float4 posMVals[3] = {
+        {0.0,0.0,1.0,1.0},
+        {0.0,1.0,0.0,1.0},
+        {1.0,0.0,0.0,1.0}
+    };
+
+    uint64_t* mortonCodes;
+    uint64_t* originalIndex;
+    float4* cudaPosMVals;
+    cudaMalloc(&cudaPosMVals,sizeof(float4)*3);
+    cudaMalloc(&mortonCodes,sizeof(uint64_t)*3);
+    cudaMalloc(&originalIndex,sizeof(uint64_t)*3);
+
+    cudaMemcpy(cudaPosMVals,posMVals,sizeof(float4)*3,cudaMemcpyHostToDevice);
+
+    mortonEncode<<<1,3>>>(cudaPosMVals,mortonCodes,originalIndex,3,rootBox);
+    cudaDeviceSynchronize();
+
+    uint64_t cpuMCodes[3];
+
+    cudaMemcpy(cpuMCodes,mortonCodes,sizeof(uint64_t)*3,cudaMemcpyDeviceToHost);
+
+    printf("\n");
+    for (int i = 0; i < 3; i++) {
+        printf("Morton code (%d): %llo \n", i, (long long)cpuMCodes[i]);
+        fflush(stdout);
+    }
+
     cudaEvent_t startTime, finishTime;
     cudaEventCreate(&startTime);
     cudaEventCreate(&finishTime);
@@ -318,13 +383,13 @@ int main(void) {
     progressPrinter(tSteps,0,40);
 
     for (int i = 0; i < tSteps; i++) {
-        forceCalc<<<forceBlocks,threadsPerBlock>>>(cudaPositionMassVals,cudaAccelerationVals,cpuNThreadsVal,G,antiSingularity*antiSingularity);
+        forceCalc<<<forceBlocks,THREADPERBLOCK>>>(cudaPositionMassVals,cudaAccelerationVals,paddedStarCount,G,antiSingularity*antiSingularity);
         //cudaDeviceSynchronize();
-        integrateStep<<<integrateBlocks,threadsPerBlock>>>(cudaPositionMassVals,cudaVelocityVals,cudaAccelerationVals,cpuNThreadsVal,dt);
+        integrateStep<<<integrateBlocks,THREADPERBLOCK>>>(cudaPositionMassVals,cudaVelocityVals,cudaAccelerationVals,paddedStarCount,dt);
         //cudaDeviceSynchronize();
 
         if (i % framesPerWrite == 0) {
-            cudaMemcpy(cpuPositionMassVals,cudaPositionMassVals,posSize,cudaMemcpyDeviceToHost);
+            cudaMemcpy(cpuPositionMassVals,cudaPositionMassVals,unpaddedPosSize,cudaMemcpyDeviceToHost);
             writeFrame(fptr,(vec4*)cpuPositionMassVals,starCount,frameBuffer);
             progressPrinter(tSteps,i,40);
         }
