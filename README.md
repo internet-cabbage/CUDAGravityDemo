@@ -14,3 +14,12 @@ Starting with the galactic disk, in almost all measured cases, the luminosity (a
 $$\mu (R) = \mu_0 e^{- \alpha R}$$
 
 Where $\alpha$ is a constant dictating the scaling relationship.
+
+To find the probability of a star being at a certain radius from the centre of the galaxy, we can differentiate the above expression with respect to radius $R$ to get the following:
+
+$$\frac{d\mu}{dR} = - \mu_0 \alpha e^{- \alpha R}$$
+
+Then based on the definition of surface density, $dM = A d\mu$, so we can substitute this identity into the above equation and rearrange to get the following equation for a circular disk:
+
+$$\frac{dM}{dR} = - 2 \pi R \mu_0 e^{- \alpha R}$$
+
