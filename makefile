@@ -3,7 +3,8 @@
 
 
 NVCC = nvcc
-SRCFILES = basicGravity.cu inputOutput.c tree.cu
+NVCCFLAGS = -I/home/linuxbrew/.linuxbrew/opt/cglm/include
+SRCFILES = basicGravity.cu inputOutput.c tree.cu initialConditions.c
 TARGET = gravitySim
 
 STD = -std=c++17
@@ -22,12 +23,12 @@ QUICK = -O0
 DEBUG = -g -lineinfo -Xcompiler=-Og -Xcompiler=-fsanitize=undefined -Xcompiler=-fno-sanitize-recover=all
 
 default: $(SRCFILES)
-	$(NVCC) $(STD) $(ARCH) $(RELEASE) $(WARNINGS) $^ -o $(TARGET)
+	$(NVCC) $(NVCCFLAGS) $(STD) $(ARCH) $(RELEASE) $(WARNINGS) $^ -o $(TARGET)
 
 quick: $(SRCFILES)
-	$(NVCC) $(STD) $(ARCH) $(QUICK) $(WARNINGS) $^ -o $(TARGET)
+	$(NVCC) $(NVCCFLAGS) $(STD) $(ARCH) $(QUICK) $(WARNINGS) $^ -o $(TARGET)
 debug: $(SRCFILES)
-	$(NVCC) $(STD) $(ARCH) $(DEBUG) $(WARNINGS) $^ -o $(TARGET)
+	$(NVCC) $(NVCCFLAGS) $(STD) $(ARCH) $(DEBUG) $(WARNINGS) $^ -o $(TARGET)
 run:
 	./$(TARGET)
 computeSanitize:
