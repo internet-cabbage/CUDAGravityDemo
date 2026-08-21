@@ -1,0 +1,18 @@
+
+// Create the tmux session and enter it
+tmux new -s sim
+
+// Then to detach the session, I use Ctrl-b then press d so that it runs even when the connection stops.
+
+// To reconnect
+tmux attach -t sim
+
+// See what sessions exist
+tmux ls
+
+// Close session
+tmux kill-session -t sim
+
+// Scroll mode
+
+Ctrl-b [
