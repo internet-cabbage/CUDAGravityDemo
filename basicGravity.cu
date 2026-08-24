@@ -179,9 +179,9 @@ void threadSizeCalc(int* forceBlocks, int* integrateBlocks, int* paddedStarCount
 int main(void) {
     srand(time(0));
     //int cpuNThreads = 256;
-    int tSteps = 1000;
-    int starCount = 50000;
-    int framesPerWrite = 20;
+    int tSteps = 10000;
+    int starCount = 500000;
+    int framesPerWrite = 5;
 
     // Size of star box
 
@@ -208,8 +208,8 @@ int main(void) {
     printf("\nInteractions total: %lu\n\n", (long int)tSteps * NSquared);
 
     // Put parameters and constants in array;
-    float dt = 0.02;
-    float antiSingularity = 0.5; // Can never be zero, otherwise an optimisation assumption breaks and the code will calculate NaN for acceleration
+    float dt = 0.04;
+    float antiSingularity = 0.2; // Can never be zero, otherwise an optimisation assumption breaks and the code will calculate NaN for acceleration
 
     // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
     // Define arrays on CPU
@@ -395,39 +395,49 @@ int main(void) {
         fflush(stdout);
     }
 
-    cudaEvent_t startTime, finishTime;
+    cudaEvent_t startTime, finishTime, mathStartTime, mathEndTime;
     cudaEventCreate(&startTime);
     cudaEventCreate(&finishTime);
+
+    // Functions to profile the maths speed
+    cudaEventCreate(&mathStartTime);
+    cudaEventCreate(&mathEndTime);
+    float timePerStep = 2.0;
+    cudaEventRecord(mathStartTime,0);
 
     // Record the start time
     cudaEventRecord(startTime,0);
     
 
-    progressPrinter(tSteps,0,40);
+    progressPrinter(tSteps,0,40,0);
 
     for (int i = 0; i < tSteps; i++) {
+        cudaEventRecord(mathStartTime,0);
         forceCalc<<<forceBlocks,THREADPERBLOCK>>>(cudaPositionMassVals,cudaAccelerationVals,starCount,paddedStarCount,antiSingularity*antiSingularity);
         //cudaDeviceSynchronize();
         integrateStep<<<integrateBlocks,THREADPERBLOCK>>>(cudaPositionMassVals,cudaVelocityVals,cudaAccelerationVals,starCount,dt);
-        //cudaDeviceSynchronize();
-
-        if (i % framesPerWrite == 0) {
+        cudaEventRecord(mathEndTime,0);
+        cudaDeviceSynchronize();
+        if (i % framesPerWrite == 0) {        
+            cudaError_t mathTimeErr = cudaEventElapsedTime(&timePerStep,mathStartTime,mathEndTime);
+            if (mathTimeErr != 0) {printf("CUDA ERROR: Problem with frame time calculator, %s\n",cudaGetErrorString(mathTimeErr));}
             cudaMemcpy(cpuPositionMassVals,cudaPositionMassVals,unpaddedPosSize,cudaMemcpyDeviceToHost);
             writeFrame(fptr,(sVec4*)cpuPositionMassVals,starCount,frameBuffer);
-            progressPrinter(tSteps,i,40);
+            progressPrinter(tSteps,i,40,timePerStep/((float)framesPerWrite));
         }
     }
-    cudaDeviceSynchronize();
     cudaEventRecord(finishTime,0);
-    float timeElapsedMilliseconds = 0;
-    cudaEventElapsedTime(&timeElapsedMilliseconds,startTime,finishTime);
+    cudaDeviceSynchronize();
+    float timeElapsedMilliseconds = -1.1;
+    cudaError_t totalElapsedTimeErr =  cudaEventElapsedTime(&timeElapsedMilliseconds,startTime,finishTime);
+    if (totalElapsedTimeErr != 0) {printf("CUDA ERROR: Problem with total elapsed time calculator, %s\n", cudaGetErrorString(totalElapsedTimeErr));}
 
 
 
-    progressPrinter(tSteps,tSteps,40);
+    progressPrinter(tSteps,tSteps,40,timePerStep);
     printf("\n");
 
-    printf("\n\nTotal time elapsed: %f\n\n", timeElapsedMilliseconds/1000.0);
+    printf("\n\nTotal time elapsed (s): %f\n\n", timeElapsedMilliseconds/(1000.0f));
 
     printf("\nInteractions per second: %e\n", (double) tSteps*1000*(NSquared)/(timeElapsedMilliseconds));
     return 0;

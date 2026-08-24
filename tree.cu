@@ -61,18 +61,7 @@ Code modified based off of the example code given in the CUDA documentation:
     -   https://gevtushenko.github.io/cccl/cub/api/structcub_1_1DeviceRadixSort.html
 
 */
-void radixSortInitialiser(int* mortonCodesIn, int* mortonCodesOut, int* originalIndexIn, int* originalIndexOut, int NItems) {
-    // Temporary storage requirements
-    void* tempStorage = nullptr;
-    size_t tempStorageBytes = 0;
-    cub::DeviceRadixSort::SortPairs(tempStorage,tempStorageBytes,mortonCodesIn,mortonCodesOut,originalIndexIn,originalIndexOut,NItems);
 
-    cudaMalloc(&tempStorage, tempStorageBytes);
-}
-
-void radixSort(int* mortonCodesIn, int* mortonCodesOut, int* originalIndexIn, int* originalIndexOut, int NItems) {
-    //cub::DeviceRadixSort::SortPairs()
-}
 
 
 

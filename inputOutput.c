@@ -10,7 +10,7 @@ void writeFrame(FILE *dataFile, sVec4* positionVals, size_t N, float *frameBuffe
     fwrite(frameBuffer, sizeof(float), 3*N, dataFile);
 }
 
-void progressPrinter(int tSteps, int currentStep, int width) {
+void progressPrinter(int tSteps, int currentStep, int width, float timePerStep) {
     double percentageVal = (double) currentStep / (tSteps) * 100;
 
     char filledBar[] = {"||||||||||||||||||||||||||||||||||||||||"};
@@ -24,6 +24,6 @@ void progressPrinter(int tSteps, int currentStep, int width) {
     fprintf(stdout,"%.s", emptyBar);
 
     // Write filled bar
-    fprintf(stdout,"\r %5.2f%% [%.*s%.*s] tStep: %5.d / %d", percentageVal, filledWidth, filledBar, emptyPad, emptyBar, currentStep, tSteps);
+    fprintf(stdout,"\r %5.2f%% [%.*s%.*s] tStep: %5.d / %d, stepTime (ms): %5.4f", percentageVal, filledWidth, filledBar, emptyPad, emptyBar, currentStep, tSteps, timePerStep);
     fflush(stdout);
 }

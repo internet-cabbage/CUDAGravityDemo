@@ -5,6 +5,6 @@
 #include "types.h"
 
 void writeFrame(FILE *dataFile, sVec4* positionVals, size_t N, float *frameBuffer);
-void progressPrinter(int tSteps, int currentStep, int width);
+void progressPrinter(int tSteps, int currentStep, int width, float timePerStep);
 
 #endif
