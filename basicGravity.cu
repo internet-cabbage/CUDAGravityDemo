@@ -19,6 +19,39 @@ extern "C" {
 #define THREADCOARSENING 2
 #define THREADPERBLOCK 256
 
+void createWorldBox(const float4* cudaPositionMassVals, const int starCount, 
+                         float3* cudaMinCorner, float3* cudaMaxCorner,
+                         float3* cudaOutputMin, float3* cudaOutputMax,
+                         worldBox* outputWorldBox) {
+    float3 minCorner, maxCorner;
+    localMinMaxFinder<<<BOXBLOCKS,BOXTHREADS>>>(cudaPositionMassVals,starCount,cudaMinCorner,cudaMaxCorner);
+    globalMinMaxReducer<<<1,BOXTHREADS>>>(cudaMinCorner,cudaMaxCorner,BOXBLOCKS,cudaOutputMin,cudaOutputMax);
+    cudaMemcpy(&minCorner,cudaOutputMin,sizeof(float3),cudaMemcpyDeviceToHost);
+    cudaMemcpy(&maxCorner,cudaOutputMax,sizeof(float3),cudaMemcpyDeviceToHost);
+
+    float width = maxCorner.x - minCorner.x;
+    float height = maxCorner.y - minCorner.y;
+    float depth = maxCorner.z - minCorner.z;
+    float extent = fmaxf(width, fmaxf(height,depth));
+
+    /*
+    The binary representation of the integer 1 is: 0000...0001
+    Since I only care about the first 21 bits of the integer, if I left shift it by 21 bits, I get: 1000...0000 (decimal value: 2,097,152)
+    
+    If I subtract 1 from it, it ends up getting the binary representation: 0111...1111, which is the largest value representable in 21 bits
+    */
+    int biggest21BitNum = (1u<<21)-1;
+    // Scale is a way of mapping between the float coordinates, and an integer grid of range [0,2^21]
+    float scale = (float)(biggest21BitNum) / extent;
+
+    // Now we actually assign these values to the worldBox
+
+    outputWorldBox->minX = minCorner.x;
+    outputWorldBox->minY = minCorner.y;
+    outputWorldBox->minZ = minCorner.z;
+    outputWorldBox->scale = scale;
+}
+
 // Helper function
 sVec3* randomGen(int lower, int upper, size_t N) {
     // Adress at which the array is saved at
@@ -180,7 +213,7 @@ int main(void) {
     srand(time(0));
     //int cpuNThreads = 256;
     int tSteps = 10000;
-    int starCount = 500000;
+    int starCount = 50000;
     int framesPerWrite = 5;
 
     // Size of star box
@@ -276,7 +309,11 @@ int main(void) {
     // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
 
     float4* cudaPositionMassVals = 0;
+    float4* cudaPositionMassValsSorted = 0;
+
     float3* cudaVelocityVals = 0;
+    float3* cudaVelocityValsSorted = 0;
+
     float3* cudaAccelerationVals = 0;
 
     // Allocate memory on GPU
@@ -289,8 +326,18 @@ int main(void) {
     fflush(stdout);
 
     // Allocate arrays
+    /*
+    Two position and velocity arrays are needed, as after the particles have been sorted in morton order, we need to rearrange the position and velocity arrays.
+    In order to do this we need a separate array, as an in-place reordering would have many race conditions and would be a mess.
+
+    The acceleration array does not need an equivalent duplicate, as it is overwritten each frame.
+    */
     cudaMalloc(&cudaPositionMassVals,posSize);
+    cudaMalloc(&cudaPositionMassValsSorted,posSize);
+
     cudaMalloc(&cudaVelocityVals,velSize);
+    cudaMalloc(&cudaVelocityValsSorted,velSize);
+
     cudaMalloc(&cudaAccelerationVals,accelSize);
 
     // Error checking
@@ -360,40 +407,62 @@ int main(void) {
     printf("Started to calculate force\n");
 
     // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
-    // Morton coding test
+    // Morton coding initialisation
     // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
 
+    // For the radix sorter to work, it requires an array of the morton codes as input, and an array to write the sorted array to
+    // The 'in' variables are basically just the input, and the 'out' variables are the sorted output
+    uint64_t* cudaMortonCodesIn;
+    uint64_t* cudaMortonCodesOut;
+    uint32_t* cudaOriginalIndexIn; // The index / star id of the star whose morton code is being found
+    uint32_t* cudaOriginalIndexOut;
+    
+
+    cudaMalloc(&cudaMortonCodesIn,sizeof(uint64_t)*starCount);
+    cudaMalloc(&cudaMortonCodesOut,sizeof(uint64_t)*starCount);
+
+    cudaMalloc(&cudaOriginalIndexIn,sizeof(uint32_t)*starCount);
+    cudaMalloc(&cudaOriginalIndexOut,sizeof(uint32_t)*starCount);
+
+    // Allocating memory for the bounding boxes
+    float3* cudaMinCorner; float3* cudaMaxCorner; float3* cudaOutputMin; float3* cudaOutputMax;
+    cudaMalloc(&cudaMinCorner,sizeof(float3)*BOXBLOCKS);
+    cudaMalloc(&cudaMaxCorner,sizeof(float3)*BOXBLOCKS);
+    cudaMalloc(&cudaOutputMin,sizeof(float3));
+    cudaMalloc(&cudaOutputMax,sizeof(float3));
+
+    // Define the rootbox
     worldBox rootBox;
     rootBox.minX = 0.0; rootBox.minY = 0.0; rootBox.minZ = 0.0;
-    rootBox.scale = 1.0;
+    rootBox.scale = 0.0;
+    createWorldBox(cudaPositionMassVals,starCount,cudaMinCorner,cudaMaxCorner,cudaOutputMin,cudaOutputMax,&rootBox);
 
-    float4 posMVals[3] = {
-        {0.0,0.0,1.0,1.0},
-        {0.0,1.0,0.0,1.0},
-        {1.0,0.0,0.0,1.0}
-    };
+    if (rootBox.scale == 0.0) {
+        printf("ERROR: rootBox failed to initialise.\n\tminXCoord: %f\n\tminYCoord %f\n\tminZCoord: %f\n\tscale: %f\n",rootBox.minX,rootBox.minY,rootBox.minZ,rootBox.scale);
+        fflush(stdout);
+        exit(-1);
+    }
 
-    uint64_t* mortonCodes;
-    uint64_t* originalIndex;
-    float4* cudaPosMVals;
-    cudaMalloc(&cudaPosMVals,sizeof(float4)*3);
-    cudaMalloc(&mortonCodes,sizeof(uint64_t)*3);
-    cudaMalloc(&originalIndex,sizeof(uint64_t)*3);
-
-    cudaMemcpy(cudaPosMVals,posMVals,sizeof(float4)*3,cudaMemcpyHostToDevice);
-
-    mortonEncode<<<1,3>>>(cudaPosMVals,mortonCodes,originalIndex,3,rootBox);
+    // Calculate the morton codes for the stars
+    mortonEncode<<<integrateBlocks,THREADPERBLOCK>>>(cudaPositionMassVals,cudaMortonCodesIn,cudaOriginalIndexIn,starCount,rootBox);
     cudaDeviceSynchronize();
 
-    uint64_t cpuMCodes[3];
+    localMinMaxFinder<<<BOXBLOCKS,BOXTHREADS>>>(cudaPositionMassVals,starCount,cudaMinCorner,cudaMaxCorner);
+    globalMinMaxReducer<<<1,BOXTHREADS>>>(cudaMinCorner,cudaMaxCorner,BOXBLOCKS,cudaOutputMin,cudaOutputMax);
 
-    cudaMemcpy(cpuMCodes,mortonCodes,sizeof(uint64_t)*3,cudaMemcpyDeviceToHost);
+    cudaDeviceSynchronize();
 
-    printf("\n");
-    for (int i = 0; i < 3; i++) {
-        printf("Morton code (%d): %llo \n", i, (long long)cpuMCodes[i]);
-        fflush(stdout);
-    }
+    // Extract values from GPU to CPU so I can print them
+    float3 minCorner, maxCorner;
+
+    cudaMemcpy(&minCorner,cudaOutputMin,sizeof(float3),cudaMemcpyDeviceToHost);
+    cudaMemcpy(&maxCorner,cudaOutputMax,sizeof(float3),cudaMemcpyDeviceToHost);
+
+    printf("Minimum corner: (%f,%f,%f)\nMaximum corner: (%f,%f,%f)\n",minCorner.x,minCorner.y,minCorner.z, maxCorner.x,maxCorner.y,maxCorner.z);
+
+
+
+    // CPU MIN MAX
 
     cudaEvent_t startTime, finishTime, mathStartTime, mathEndTime;
     cudaEventCreate(&startTime);
@@ -411,17 +480,76 @@ int main(void) {
 
     progressPrinter(tSteps,0,40,0);
 
+    /*
+    Process:
+        1) Start time profiling
+        2) Produce the new worldBox bounding box
+        3) Calculate the morton codes of the stars
+        4) Radix sort the stars via their morton codes
+        5) Use the sorted codes to produce the Barnes-Hutt tree in parallel
+        6) Traverse the Barnes-Hutt tree to calculate the force acting on the particles
+        7) Integrate the force steps to move the stars
+        8) Check if the frame should be written to data
+        9) Repeat
+    */
+
+    // Create radix sorter
+    radixSorter* sorter = sorterCreate(starCount);
+
     for (int i = 0; i < tSteps; i++) {
+        // PROCESS 1)
         cudaEventRecord(mathStartTime,0);
-        forceCalc<<<forceBlocks,THREADPERBLOCK>>>(cudaPositionMassVals,cudaAccelerationVals,starCount,paddedStarCount,antiSingularity*antiSingularity);
+
+        // PROCESS 2)
+        createWorldBox(cudaPositionMassVals,starCount,cudaMinCorner,cudaMaxCorner,cudaOutputMin,cudaOutputMax,&rootBox);
+        
+        // PROCESS 3)
+        mortonEncode<<<integrateBlocks,THREADPERBLOCK>>>(cudaPositionMassVals,cudaMortonCodesIn,cudaOriginalIndexIn,starCount,rootBox);
+        cudaDeviceSynchronize();
+
+        // PROCESS 4)
+        radixSortPairs(sorter,cudaMortonCodesIn,cudaMortonCodesOut,cudaOriginalIndexIn,cudaOriginalIndexOut,starCount);
+
+        reorderParticles<<<integrateBlocks,THREADPERBLOCK>>>(cudaPositionMassVals,cudaVelocityVals,cudaPositionMassValsSorted,cudaVelocityValsSorted,cudaOriginalIndexOut,starCount);
+
+        // Check if any morton codes are duplicated
+        
+        /*
+        uint64_t* CPUMortonCodesTemp = (uint64_t*) calloc(starCount,sizeof(uint64_t));
+        cudaMemcpy(CPUMortonCodesTemp,cudaMortonCodesOut,sizeof(uint64_t)*starCount,cudaMemcpyDeviceToHost);
+        int duplications = 0;
+        for (int j = 0; j < starCount-1; j++) {
+            if (CPUMortonCodesTemp[j] == CPUMortonCodesTemp[j+1]) {
+                duplications-=-1;
+            }
+        }
+        printf("DUPLICATE MORTON CODES: %d\n", duplications);
+        free(CPUMortonCodesTemp);
+        */
+
+        // PROCESS 5)
+
+        // TODO
+
+        // Pre morton sorting time 64.67 seconds
+
+        // PROCESS 6)
+        forceCalc<<<forceBlocks,THREADPERBLOCK>>>(cudaPositionMassValsSorted,cudaAccelerationVals,starCount,paddedStarCount,antiSingularity*antiSingularity);
+        
+        // TODO
+
+        // PROCESS 7)
+
+
+        
         //cudaDeviceSynchronize();
-        integrateStep<<<integrateBlocks,THREADPERBLOCK>>>(cudaPositionMassVals,cudaVelocityVals,cudaAccelerationVals,starCount,dt);
+        integrateStep<<<integrateBlocks,THREADPERBLOCK>>>(cudaPositionMassValsSorted,cudaVelocityValsSorted,cudaAccelerationVals,starCount,dt);
         cudaEventRecord(mathEndTime,0);
         cudaDeviceSynchronize();
         if (i % framesPerWrite == 0) {        
             cudaError_t mathTimeErr = cudaEventElapsedTime(&timePerStep,mathStartTime,mathEndTime);
             if (mathTimeErr != 0) {printf("CUDA ERROR: Problem with frame time calculator, %s\n",cudaGetErrorString(mathTimeErr));}
-            cudaMemcpy(cpuPositionMassVals,cudaPositionMassVals,unpaddedPosSize,cudaMemcpyDeviceToHost);
+            cudaMemcpy(cpuPositionMassVals,cudaPositionMassValsSorted,unpaddedPosSize,cudaMemcpyDeviceToHost);
             writeFrame(fptr,(sVec4*)cpuPositionMassVals,starCount,frameBuffer);
             progressPrinter(tSteps,i,40,timePerStep/((float)framesPerWrite));
         }
@@ -431,6 +559,13 @@ int main(void) {
     float timeElapsedMilliseconds = -1.1;
     cudaError_t totalElapsedTimeErr =  cudaEventElapsedTime(&timeElapsedMilliseconds,startTime,finishTime);
     if (totalElapsedTimeErr != 0) {printf("CUDA ERROR: Problem with total elapsed time calculator, %s\n", cudaGetErrorString(totalElapsedTimeErr));}
+
+
+    // World box location
+
+
+
+    cudaDeviceSynchronize();
 
 
 

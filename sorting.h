@@ -6,6 +6,9 @@
 #include <stddef.h>
 #include <stdlib.h>
 
+
+__global__ void reorderParticles(const float4* __restrict__ posMassValsIn, const float3* __restrict__ velValsIn, float4* posMassValsOut, float3* velValsOut, uint32_t* originalIndex, int starCount);
+
 extern "C" {
 typedef struct {
     void* tempStorage;
@@ -15,8 +18,8 @@ typedef struct {
 
 radixSorter* sorterCreate(int maxCount);
 
-void radixSortPairs(radixSorter* sorter, const uint64_t* keysIn, const uint64_t* keysOut,
-                                         const uint64_t* valsIn, const uint64_t* valsOut,
+void radixSortPairs(radixSorter* sorter, const uint64_t* keysIn, uint64_t* keysOut,
+                                         const uint32_t* valsIn, uint32_t* valsOut,
                                          int numCount);
 
 void sorterDestroyer(radixSorter* s);

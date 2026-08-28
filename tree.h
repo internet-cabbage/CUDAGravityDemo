@@ -11,14 +11,33 @@
 
 #include "types.h"
 
-__global__ void mortonEncode(const float4* posMassVals, uint64_t* mortonCodes, uint64_t* originalIndex, int NStars, worldBox rootBox);
+
+#define BOXTHREADS 256
+#define BOXBLOCKS 256
+
+__global__ void mortonEncode(const float4* posMassVals, uint64_t* mortonCodes, uint32_t* originalIndex, int NStars, worldBox rootBox);
+
+__global__ void localMinMaxFinder(const float4* __restrict__ posMassVals, unsigned int N, float3* minCorner, float3* maxCorner);
+
+__global__ void globalMinMaxReducer(const float3* __restrict__ minCorner, const float3* __restrict__ maxCorner, int count, float3* outMin, float3* outMax);
+
+__global__ void identifyNodesAtLevel(uint64_t* mortonCodes, int nodeLevel, int starCount, int* nodeFlags);
 
 extern "C" {
 
-size_t sortQueryTemp(int n);
-void sortPairs(uint64_t* keysIn, uint64_t* keysOut,
-            uint64_t* valsIn, uint64_t* valsOut,
-            int n, void* temp, size_t tempBytes);
+typedef struct {
+    void* tempStorage;
+    size_t tempStorageBytes;
+    int capacity;
+
+    uint32_t* flags;
+    uint32_t* offsetsPing;
+    uint32_t* offsetsPong;
+} treeBuilder;
+
+treeBuilder* sumCreate(int maxCount);
+
+void prefixSum(treeBuilder* builder, int* flags, int* offsets, int maxCount);
 
 }
 

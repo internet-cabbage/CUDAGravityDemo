@@ -4,7 +4,7 @@
 
 NVCC = nvcc
 NVCCFLAGS = -I/home/linuxbrew/.linuxbrew/opt/cglm/include
-SRCFILES = basicGravity.cu inputOutput.c tree.cu initialConditions.c
+SRCFILES = basicGravity.cu inputOutput.c tree.cu initialConditions.c sorting.cu
 TARGET = gravitySim
 
 STD = -std=c++17
@@ -31,8 +31,8 @@ debug: $(SRCFILES)
 	$(NVCC) $(NVCCFLAGS) $(STD) $(ARCH) $(DEBUG) $(WARNINGS) $^ -o $(TARGET)
 run:
 	./$(TARGET)
-computeSanitize:
-	compute-sanitizer ./gravitySim
+computeDebug:
+	compute-sanitizer --tool racecheck ./gravitySim
 clean: 
 	rm -f $(TARGET)
 push:

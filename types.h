@@ -2,6 +2,7 @@
 #define TYPES_H
 
 #include <stdint.h>
+#include <cuda_runtime.h>
 
 typedef struct __attribute__((aligned(16))) {
     float x,y,z,m;
@@ -23,5 +24,31 @@ typedef struct {
     // The scale is then multiplied by 2^21, which is equal to a multiplication by 1 << 21.
     float scale;
 } worldBox;
+
+/*
+This struct contains all the data used to describe and handle nodes in the program.
+
+To understand this it is best to think about what the morton indices actually encode. A 3D morton code basically already describes an octtree, with the
+first 3 bits determining which octrant the particle falls within with respect to the root node. And every successive 3 bits determine its position inside of that node (if it exists).
+
+For the sake of simplicity we will define each 3 bits sequentially from the left, as being a distinct 'level' in the octtree, so for example the particle's octrant wrt the root node is its level 1 position etc.
+Since we have 3 interleaved integers stored in a 64 bit number, we will only have 21 different levels.
+
+fields:
+    -nodePathFromRoot; The path that must be taken from the root node to reach this node
+    -firstParticleIndex; The index in the main particle array at which point the first particle in the node is located
+    -particleCount; The number of particles in the node
+
+*/
+
+typedef struct {
+    uint64_t nodePathFromRoot;
+    int firstParticleIndex; // The index in the sorted morton code array, at which point the particle(s) within this node start
+    int particleCount; // How many particles are within the node
+    int child[8]; // The index positions of the child nodes
+
+    int treeLevel;
+    float4 massData; // The centre of mass of the node (first 3 elements), as well as the total mass (4th) element
+} node;
 
 #endif

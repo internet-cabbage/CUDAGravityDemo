@@ -8,6 +8,136 @@
 
 
 /*
+Morton code bit extraction.
+
+So the morton codes store data interleaved in the order: x_20, y_20, z_20, x_19 ... x_0, y_0, z_0
+To determine what octrant (my new name for octtree node) the star lies within, I have to extract a set of 3 bits from the encoded value.
+
+The first 3 bits (x_20,y_20,z_20) determine what octrant of the root node the star lies within, and the second 3 bits determine the octrant of that etc...
+
+To extract the bits we can just right shift the bits, as it discards bits to the right.
+
+The 63 comes from the fact that the 64th bit doesn't store anything anyways
+*/
+
+__device__ uint64_t extractBitsFromLevel(uint64_t mortonCode, int extractLevel) {
+    uint64_t extractedBits = (mortonCode >> (63 - (3*extractLevel)));
+    return extractedBits;
+}
+
+/*
+Morton insertion
+
+If two stars lie in the same octrant of the root node, then they will share the first 3 bits of their morton code.
+Likewise if any two stars lie in the same octrant of a node at depth N, they will share the first N*3 bits of their morton code.
+
+Since particles are sorted according to morton code, all the child-particles of a node at level N share the first N digits
+
+*/
+
+/*
+I 
+*/
+
+__global__ void identifyNodesAtLevel(uint64_t* mortonCodes, int nodeLevel, int starCount, int* nodeFlags) {
+    int threadNum = threadIdx.x + (blockDim.x * blockIdx.x);
+
+    if (threadNum >= starCount) {return;}
+    if (threadNum == 0) {nodeFlags[0]=1;return;} // The first particle has to start a node
+
+    uint64_t currentOctrant = extractBitsFromLevel(mortonCodes[threadNum],nodeLevel);
+    uint64_t previousOctrant = extractBitsFromLevel(mortonCodes[threadNum-1],nodeLevel);
+
+    if (currentOctrant != previousOctrant) {
+        nodeFlags[threadNum] = 1;
+    }
+    else {
+        nodeFlags[threadNum] = 0;
+    }
+}
+
+// =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
+// Prefix sum wrappers
+// =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
+
+treeBuilder* sumCreate(int maxCount) {
+    if (maxCount <= 0) {
+        printf("ERROR: Attempted to initialise a prefix sum over an array of <= 0 elements.\n");
+        fflush(stdout);
+        exit(-1);
+    }
+    // Allocate memory for the prefix sum
+    treeBuilder* sum = (treeBuilder*) calloc(1, sizeof(treeBuilder));
+
+    // Check if the memory was allocated correctly etc
+    if (sum==NULL) {printf("ERROR: Prefix sum could not be initialised.\n");exit(-1);}
+    
+    uint32_t* nullArray = nullptr; // To initialise the summation, it just needs to know the type
+
+    cudaError_t sumError = cub::DeviceScan::ExclusiveSum(nullptr,sum->tempStorageBytes,nullArray,nullArray,maxCount);
+
+    if (sumError != 0) {printf("ERROR: Prefix sum initialisation failed: %s\n",cudaGetErrorString(sumError));exit(-1);}
+
+    // Allocate memory for prefix sum
+    cudaError_t mallocErr = cudaMalloc(&sum->tempStorage,sum->tempStorageBytes);
+    
+    if (mallocErr != 0) {printf("ERROR: Failed to malloc data for the exclusive sum");exit(-1);}
+    
+    sum->capacity = maxCount;
+
+    // =======================
+    // Now I allocate the rest of the arrays for the treeBuilder:
+    // flags,offsetsPing,offsetsPong,
+
+    uint32_t* flags; uint32_t* offsetsPing; uint32_t* offsetsPong;
+    size_t arraySize = sizeof(uint32_t) * maxCount;
+
+    cudaMalloc(&flags,arraySize);
+    cudaMalloc(&offsetsPing,arraySize);
+    cudaMalloc(&offsetsPong,arraySize);
+
+    sum->flags = flags;
+    sum->offsetsPing = offsetsPing;
+    sum->offsetsPong = offsetsPong;
+
+    return sum;
+}   
+
+void prefixSum(treeBuilder* builder, uint32_t* flags, uint32_t* offsets, int maxCount) {
+    
+    if (builder == NULL) {
+        printf("ERROR: treeBuilder struct passed to prefixSum() was uninitialised.\n");
+        exit(-1);
+    }
+
+    if (maxCount <= 0 || maxCount > builder->capacity) {
+        printf("ERROR: Length of array to sum conflicts with capacity of treeBuilder struct.\n");
+        exit(-1);
+    }
+
+    cudaError_t sumError = cub::DeviceScan::ExclusiveSum(builder->tempStorage,builder->tempStorageBytes,flags,offsets,maxCount);
+    if (sumError != 0) {
+        printf("ERROR: Error occured while performing prefix sum: %s\n",cudaGetErrorString(sumError));
+        exit(-1);
+    }
+}
+
+void sumDestroyer(treeBuilder* sum) {
+    if (sum == NULL) {printf("ERROR: Attempted to delete non-existant prefix sum object.\n"); exit(-1);}
+
+    // Free cuda arrays
+    cudaFree(sum->flags);
+    cudaFree(sum->offsetsPing);
+    cudaFree(sum->offsetsPong);
+    
+    // Dereference pointers
+    sum->capacity = 0;
+    sum->tempStorage = NULL;
+    sum->tempStorageBytes = (size_t) 0;
+    cudaFree(sum);
+}
+
+/*
 
 # Source - https://stackoverflow.com/a/18529061
 # Posted by Gabriel, modified by community. See post 'Timeline' for change history
@@ -30,11 +160,11 @@ __device__ uint64_t expandBits(uint64_t num) {
 }
 
 // Morton codes are given in order (x_1, y_1, z_1...)
-__device__ uint64_t mortonIndex(uint64_t x, uint64_t y, uint64_t z) {
+__device__ uint64_t mortonIndex(uint32_t x, uint32_t y, uint32_t z) {
     return (expandBits(x)<<2) | (expandBits(y)<<1) | (expandBits(z));
 }
 
-__global__ void mortonEncode(const float4* posMassVals, uint64_t* mortonCodes, uint64_t* originalIndex, int NStars, worldBox rootBox) {
+__global__ void mortonEncode(const float4* posMassVals, uint64_t* mortonCodes, uint32_t* originalIndex, int NStars, worldBox rootBox) {
     int threadId = blockIdx.x * blockDim.x + threadIdx.x;
 
     // Checks if the thread is assigned to a star
@@ -69,3 +199,104 @@ Code modified based off of the example code given in the CUDA documentation:
 // Bounding box calculation code
 // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
 
+/*
+Call __syncThreads() before running this function
+*/
+__device__ void blockReduceMinMax(float3* threadMin, float3* threadMax, int interiorID) {
+    for (int i = BOXTHREADS / 2; i > 0; i /= 2) {
+        if (interiorID < i) {
+            // This makes it so that on the first run threads 0 to 127 compare all values between 0 and 256, then condense them all into 128 values at the bottom of the array.
+            // This halving is repeated until only 1 thread exists.
+            threadMin[interiorID].x = fminf(threadMin[interiorID].x, threadMin[interiorID + i].x);
+            threadMin[interiorID].y = fminf(threadMin[interiorID].y, threadMin[interiorID + i].y);
+            threadMin[interiorID].z = fminf(threadMin[interiorID].z, threadMin[interiorID + i].z);
+
+            threadMax[interiorID].x = fmaxf(threadMax[interiorID].x, threadMax[interiorID + i].x);
+            threadMax[interiorID].y = fmaxf(threadMax[interiorID].y, threadMax[interiorID + i].y);
+            threadMax[interiorID].z = fmaxf(threadMax[interiorID].z, threadMax[interiorID + i].z);
+        }
+        // Important addition to stop the code from racing
+        __syncthreads();
+    }
+}
+
+/*
+This was a source I used in order to ensure my algorithm was quick:
+
+https://medium.com/@rimikadhara/7-step-optimization-of-parallel-reduction-with-cuda-33a3b2feafd8
+
+Parameters:
+    -*posMassVals: An array of float4's containing the position info and mass info of all stars, stored as floats
+    -N: The number of stars which the reduction algorithm is acting over
+    -*minCorner: An array of float3's containing the local minimum values from each thread 
+    -*maxCorner: An array of float3's containing the local maximum values from each thread 
+*/
+__global__ void localMinMaxFinder(const float4* __restrict__ posMassVals, unsigned int N, float3* minCorner, float3* maxCorner) {
+    // Shared memory to store all the values:
+    __shared__ float3 threadMin[BOXTHREADS];
+    __shared__ float3 threadMax[BOXTHREADS];
+
+    int interiorID = threadIdx.x;
+    unsigned int exteriorID = blockIdx.x * blockDim.x + threadIdx.x; // The global thread index
+    unsigned int threadCount = gridDim.x * blockDim.x;
+
+    float3 lowerVals = make_float3(INFINITY,INFINITY,INFINITY);
+    float3 upperVals = make_float3(-INFINITY,-INFINITY,-INFINITY);
+
+    // Now perform the reduction
+    for (unsigned int i = exteriorID; i < N; i+=threadCount) {
+        float4 localPos = posMassVals[i];
+        lowerVals.x = fminf(lowerVals.x,localPos.x); upperVals.x = fmaxf(upperVals.x,localPos.x);
+        lowerVals.y = fminf(lowerVals.y,localPos.y); upperVals.y = fmaxf(upperVals.y,localPos.y);
+        lowerVals.z = fminf(lowerVals.z,localPos.z); upperVals.z = fmaxf(upperVals.z,localPos.z);
+    }
+
+    // Write the local maxima and minima to the shared memory
+
+    threadMin[interiorID] = lowerVals;
+    threadMax[interiorID] = upperVals;
+
+    // Make sure threadMin and threadMax have been filled before reducing them
+    __syncthreads();
+
+    // Then condense the threadMin and threadMax values down into global minima and maxima values
+    blockReduceMinMax(threadMin,threadMax,interiorID);
+
+    // Now since at this point all the values assigned to the block have been condensed (Or in other words... reduced...), we can just write the local minima and maxima to the block minima and maxima arrays
+    if (interiorID == 0) {
+        minCorner[blockIdx.x] = threadMin[0];
+        maxCorner[blockIdx.x] = threadMax[0];
+    }
+    
+} 
+
+
+__global__ void globalMinMaxReducer(const float3* __restrict__ minCorner, const float3* __restrict__ maxCorner, int count, float3* outMin, float3* outMax) {
+    // Shared memory to store all the values:
+    __shared__ float3 threadMin[BOXTHREADS];
+    __shared__ float3 threadMax[BOXTHREADS];
+
+    int interiorID = threadIdx.x;
+
+    float3 lowerVals = make_float3(INFINITY,INFINITY,INFINITY);
+    float3 upperVals = make_float3(-INFINITY,-INFINITY,-INFINITY);
+
+    // Check if the thread even corresponds to an id in the 
+    if (interiorID < count) {
+        lowerVals = minCorner[interiorID];
+        upperVals = maxCorner[interiorID];
+    }
+    threadMin[interiorID] = lowerVals;
+    threadMax[interiorID] = upperVals;
+
+    // Make sure threadMin and threadMax have been filled before reducing them
+    __syncthreads();
+
+    blockReduceMinMax(threadMin,threadMax,interiorID);
+
+    // Now since at this point all the values assigned to the block have been condensed (Or in other words... reduced...), we can just write the local minima and maxima to the block minima and maxima arrays
+    if (interiorID == 0) {
+        *outMin = threadMin[0];
+        *outMax = threadMax[0];
+    }
+}
