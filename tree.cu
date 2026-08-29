@@ -39,7 +39,7 @@ Since particles are sorted according to morton code, all the child-particles of 
 I 
 */
 
-__global__ void identifyNodesAtLevel(uint64_t* mortonCodes, int nodeLevel, int starCount, int* nodeFlags) {
+__global__ void identifyNodesAtLevel(uint64_t* mortonCodes, int nodeLevel, int starCount, uint32_t* nodeFlags) {
     int threadNum = threadIdx.x + (blockDim.x * blockIdx.x);
 
     if (threadNum >= starCount) {return;}
@@ -56,8 +56,44 @@ __global__ void identifyNodesAtLevel(uint64_t* mortonCodes, int nodeLevel, int s
     }
 }
 
+// Code to actually produce the nodes
+/*
+This function takes the morton codes, node flags, node offsets, tree level, total star count, and maximum node count of the tree, and uses them to write to a single great array that spans all nodes.
+
+
+Each node in the tree is all a part of one giant array. So in order to differentiate the different levels of the tree, we just add an offset to each nodeIndex that is equal to the nodeCount
+of the tree at that level. We will call this offset 'arrayLevelOffset' as we already have a variable called offset.
+*/
+
+__global__ void createNodes(const uint64_t* mortonCodes, const uint32_t* flags, const uint32_t* offsets, const uint32_t* offsetsPrev, node* nodes, int level, int arrayLevelOffset, int prevArrayLevelOffset, int starCount, int maxNodes) {
+    int threadNum = threadIdx.x + blockDim.x * blockIdx.x;
+    if (threadNum >= starCount) {return;}
+
+    if (flags[threadNum]==0) {return;} // Not the start of a node
+
+    uint64_t pathFromRoot = extractBitsFromLevel(mortonCodes[threadNum],level); 
+    
+    int nodeIndex = offsets[threadNum] + arrayLevelOffset; // The nodeIndex is basically just a value which identifies each node at a given level of the tree
+    if (nodeIndex >= maxNodes) {return;}
+    nodes[nodeIndex].nodePathFromRoot = pathFromRoot;
+    nodes[nodeIndex].treeLevel = level;
+    nodes[nodeIndex].firstParticleIndex = threadNum;
+    for (int kid = 0; kid < 8; kid++) {nodes[nodeIndex].child[kid] = -1;} // Initialise all the nodes kids to -1 to signify they are currently empty
+
+    // Add info to parent node
+    int parent;
+    if (level == 1) { // The node is the level before the root, so its parent is just the root node
+        parent = 0;
+    }
+    else {
+        parent = prevArrayLevelOffset + offsetsPrev[threadNum];
+    }
+    int childIndexNumber = pathFromRoot & 7; // The child index number is the bottom 3 bits of the morton coded path, so we just chop off every bit which isnt them.
+    nodes[parent].child[childIndexNumber] = nodeIndex;
+}  
+
 // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
-// Prefix sum wrappers
+// Prefix sum wrappers 
 // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
 
 treeBuilder* sumCreate(int maxCount) {
@@ -134,7 +170,7 @@ void sumDestroyer(treeBuilder* sum) {
     sum->capacity = 0;
     sum->tempStorage = NULL;
     sum->tempStorageBytes = (size_t) 0;
-    cudaFree(sum);
+    free(sum);
 }
 
 /*
@@ -300,3 +336,4 @@ __global__ void globalMinMaxReducer(const float3* __restrict__ minCorner, const 
         *outMax = threadMax[0];
     }
 }
+

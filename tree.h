@@ -21,19 +21,13 @@ __global__ void localMinMaxFinder(const float4* __restrict__ posMassVals, unsign
 
 __global__ void globalMinMaxReducer(const float3* __restrict__ minCorner, const float3* __restrict__ maxCorner, int count, float3* outMin, float3* outMax);
 
-__global__ void identifyNodesAtLevel(uint64_t* mortonCodes, int nodeLevel, int starCount, int* nodeFlags);
+__global__ void identifyNodesAtLevel(uint64_t* mortonCodes, int nodeLevel, int starCount, uint32_t* nodeFlags);
+
+__global__ void createNodes(const uint64_t* mortonCodes, const uint32_t* flags, const uint32_t* offsets, const uint32_t* offsetsPrev, node* nodes, int level, int arrayLevelOffset, int prevArrayLevelOffset, int starCount, int maxNodes);
+
+void prefixSum(treeBuilder* builder, uint32_t* flags, uint32_t* offsets, int maxCount);
 
 extern "C" {
-
-typedef struct {
-    void* tempStorage;
-    size_t tempStorageBytes;
-    int capacity;
-
-    uint32_t* flags;
-    uint32_t* offsetsPing;
-    uint32_t* offsetsPong;
-} treeBuilder;
 
 treeBuilder* sumCreate(int maxCount);
 

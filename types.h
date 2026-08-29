@@ -45,10 +45,23 @@ typedef struct {
     uint64_t nodePathFromRoot;
     int firstParticleIndex; // The index in the sorted morton code array, at which point the particle(s) within this node start
     int particleCount; // How many particles are within the node
+    
     int child[8]; // The index positions of the child nodes
+    // If the child[i] value is equal to -1, then the child is empty
 
     int treeLevel;
     float4 massData; // The centre of mass of the node (first 3 elements), as well as the total mass (4th) element
 } node;
+
+typedef struct {
+    void* tempStorage;
+    size_t tempStorageBytes;
+    int capacity;
+
+    uint32_t* flags;
+    uint32_t* offsetsPing;
+    uint32_t* offsetsPong;
+} treeBuilder;
+
 
 #endif
