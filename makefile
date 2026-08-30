@@ -20,7 +20,7 @@ RELEASE = -O3 -Xcompiler=-ffast-math -Xcompiler=-march=native
 
 QUICK = -O0
 
-DEBUG = -g -lineinfo -Xcompiler=-Og -Xcompiler=-fsanitize=undefined -Xcompiler=-fno-sanitize-recover=all
+DEBUG = -g -lineinfo -Xcompiler=-Og -Xcompiler=-fsanitize=undefined -Xcompiler=-fsanitize=address -Xcompiler=-fno-sanitize-recover=all
 
 default: $(SRCFILES)
 	$(NVCC) $(NVCCFLAGS) $(STD) $(ARCH) $(RELEASE) $(WARNINGS) $^ -o $(TARGET)

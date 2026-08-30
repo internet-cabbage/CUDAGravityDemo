@@ -23,7 +23,7 @@ __global__ void globalMinMaxReducer(const float3* __restrict__ minCorner, const 
 
 __global__ void identifyNodesAtLevel(uint64_t* mortonCodes, int nodeLevel, int starCount, uint32_t* nodeFlags);
 
-__global__ void createNodes(const uint64_t* mortonCodes, const uint32_t* flags, const uint32_t* offsets, const uint32_t* offsetsPrev, node* nodes, int level, int arrayLevelOffset, int prevArrayLevelOffset, int starCount, int maxNodes);
+__global__ void createNodes(const uint64_t* mortonCodes,const float4* posMassVals, const uint32_t* flags,const uint32_t* previousFlags, const uint32_t* offsets, const uint32_t* offsetsPrev, node* nodes, int level, int arrayLevelOffset, int prevArrayLevelOffset, int starCount, int maxNodes);
 
 void prefixSum(treeBuilder* builder, uint32_t* flags, uint32_t* offsets, int maxCount);
 

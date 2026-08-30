@@ -58,7 +58,8 @@ typedef struct {
     size_t tempStorageBytes;
     int capacity;
 
-    uint32_t* flags;
+    uint32_t* flagsPing;
+    uint32_t* flagsPong;
     uint32_t* offsetsPing;
     uint32_t* offsetsPong;
 } treeBuilder;

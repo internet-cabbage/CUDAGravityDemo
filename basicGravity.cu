@@ -474,13 +474,13 @@ int main(void) {
 
     treeBuilder* prefixSumObject = sumCreate(starCount);
 
-    identifyNodesAtLevel<<<BOXBLOCKS,BOXTHREADS>>>(cudaMortonCodesOut,8,starCount,prefixSumObject->flags);
+    identifyNodesAtLevel<<<BOXBLOCKS,BOXTHREADS>>>(cudaMortonCodesOut,8,starCount,prefixSumObject->flagsPing);
 
     uint32_t* CPUNodeFlags = (uint32_t*) calloc(starCount,sizeof(uint32_t));
     uint64_t* CPUMortonCodes = (uint64_t*) calloc(starCount,sizeof(uint64_t));
     cudaMemcpy(CPUMortonCodes,cudaMortonCodesOut,sizeof(uint64_t)*starCount,cudaMemcpyDeviceToHost);
 
-    cudaMemcpy(CPUNodeFlags,prefixSumObject->flags,sizeof(uint32_t)*starCount,cudaMemcpyDeviceToHost);
+    cudaMemcpy(CPUNodeFlags,prefixSumObject->flagsPing,sizeof(uint32_t)*starCount,cudaMemcpyDeviceToHost);
 
     for (int i = 0; i < 10; i++) {
         printf("MORTON CODE [%d]: %lu\n", i, CPUMortonCodes[i]);
@@ -523,31 +523,38 @@ int main(void) {
 
     uint32_t* offsets = prefixSumObject->offsetsPing;
     uint32_t* previousOffsets = prefixSumObject->offsetsPong;
+    uint32_t* flags = prefixSumObject->flagsPing;
+    uint32_t* previousFlags = prefixSumObject->flagsPong;
+    
 
     for (int levels = 1; levels <= 21; levels++) {
         // Mark the index boundaries at which point the nodes start
-        identifyNodesAtLevel<<<BOXBLOCKS,BOXTHREADS>>>(cudaMortonCodesOut,levels,starCount,prefixSumObject->flags);
+        // i.e. writes the flags array
+        identifyNodesAtLevel<<<integrateBlocks,THREADPERBLOCK>>>(cudaMortonCodesOut,levels,starCount,flags);
         cudaDeviceSynchronize();
 
         // Use the index boundaries to tag each star to say which node it lies at
-        prefixSum(prefixSumObject,prefixSumObject->flags,offsets,starCount);
+        // i.e. writes the offsets array using the flags array
+        prefixSum(prefixSumObject,flags,offsets,starCount);
         cudaDeviceSynchronize();
 
-        // Use the node boundaries to produce the node array
-        createNodes<<<BOXBLOCKS,BOXTHREADS>>>(cudaMortonCodesOut, (const uint32_t*) (prefixSumObject->flags), offsets, previousOffsets, CudaNodes, levels, arrayLevelOffset, previousArrayLevelOffset, starCount, maxNodes);
+        //void prefixSum(treeBuilder* builder, uint32_t* flags, uint32_t* offsets, int maxCount) {
+        //__global__ void createNodes(const uint64_t* mortonCodes, const uint32_t* flags, const uint32_t* offsets, const uint32_t* offsetsPrev, node* nodes, int level, int arrayLevelOffset, int prevArrayLevelOffset, int starCount, int maxNodes) {
+
+        // Use the node boundaries to produce the node arrays
+        createNodes<<<integrateBlocks,THREADPERBLOCK>>>(cudaMortonCodesOut,cudaPositionMassValsSorted,flags,previousFlags,offsets,previousOffsets,CudaNodes,levels,arrayLevelOffset,previousArrayLevelOffset,starCount,maxNodes);
         cudaDeviceSynchronize();
-
-
 
         // Calculate how many nodes were spawned in the last createNodes call
-        int nodeCount;
-
-
+        int nodeCount = 0;
 
         // the prefixSum at index i tells you how many particles occured before index i, so the total nodes is just the last element of prefixSum plus the last element of flags.
         uint32_t lastFlagVal; uint32_t lastOffsetVal;
-        CUDA_CHECK(cudaMemcpy(&lastFlagVal,&(prefixSumObject->flags[starCount-1]),sizeof(uint32_t),cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(&lastFlagVal,&(flags[starCount-1]),sizeof(uint32_t),cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaMemcpy(&lastOffsetVal,&(offsets[starCount-1]),sizeof(uint32_t),cudaMemcpyDeviceToHost));
+
+        //CUDA_CHECK(cudaMemcpy(&lastFlagVal,&(prefixSumObject->flags[starCount-1]),sizeof(uint32_t),cudaMemcpyDeviceToHost));
+        //CUDA_CHECK(cudaMemcpy(&lastOffsetVal,&(offsets[starCount-1]),sizeof(uint32_t),cudaMemcpyDeviceToHost));
         nodeCount = lastFlagVal + lastOffsetVal;
         printf("Node count at level %d is: %d\n",levels, nodeCount);
 
@@ -568,10 +575,15 @@ int main(void) {
         previousArrayLevelOffset = arrayLevelOffset;
         arrayLevelOffset += nodeCount;
 
+        // Swap offsets arrays
         uint32_t* tempVal =  previousOffsets;
         previousOffsets = offsets; // This makes the previousOffsets point to the offsets array (which is now the previous offsets array)
         offsets = tempVal; // This sets the offsets pointer to the now useless previousOffsets array, which will be overwritten
         
+        // Swap flag arrays
+        uint32_t* tempSwapVal = previousFlags;
+        previousFlags = flags;
+        flags = tempSwapVal;
     }
     cudaDeviceSynchronize();
 
@@ -580,19 +592,49 @@ int main(void) {
     // Copy back the nodes array and perform a check to see all the pointers are done properly
     cudaMemcpy(CPUNodes,CudaNodes,sizeof(node)*maxNodes,cudaMemcpyDeviceToHost);
 
+    
     printf("Copied memory from GPU to CPU\n");
     printf("Total nodes in tree: %d\n", totalNodes);
     fflush(stdout);
-    int childrenThatExist = 0;
+    int childrenPerLevel[23] = {0};
+    int totalKids = 0;
+
     for (int i = 0; i < totalNodes; i++) {
         for (int j = 0; j < 8; j++) {
             // If the child does not exist, break
             if (CPUNodes[i].child[j] != -1) {
-                childrenThatExist -=-1;
+                childrenPerLevel[(CPUNodes[i]).treeLevel] +=1;
+                totalKids +=1;
             }
         }
     }
-    printf("DRUMROLL, bmd bdm bdm bdm, there are %d many kids in the tree.\n",childrenThatExist);
+    int levelNodes[64] = {0};
+    int numFound = 0;
+    for (int i = 0; i < totalNodes; i++) {
+        if (numFound >= 64) {
+            printf("Buffer overflow!!\n");
+            exit(24);
+        }
+        if (CPUNodes[i].treeLevel == 2) {
+            levelNodes[numFound] = i;
+            numFound++;
+        
+        }
+    }
+    printf("\n\n");
+
+    for (int i = 0; i < 64; i++) {
+        printf("Node [%d] at level 2 is at index: %d\n", i, levelNodes[i]);
+    }
+
+    
+    printf("\n\n");
+    for (int i = 0; i < 23; i++) {
+        printf("Kids at level %d is: %d\n",i,childrenPerLevel[i]);
+    }
+    
+
+    printf("DRUMROLL, bmd bdm bdm bdm, there are %d many kids in the tree.\n",totalKids);
 
     printf("\n\nIF THE TOTAL NODES DIFFERS FROM THE NUMBER OF KIDS, SOMETHING IS GOING WRONG!!!\n\n\n\n");
 

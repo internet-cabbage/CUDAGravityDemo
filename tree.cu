@@ -65,7 +65,7 @@ Each node in the tree is all a part of one giant array. So in order to different
 of the tree at that level. We will call this offset 'arrayLevelOffset' as we already have a variable called offset.
 */
 
-__global__ void createNodes(const uint64_t* mortonCodes, const uint32_t* flags, const uint32_t* offsets, const uint32_t* offsetsPrev, node* nodes, int level, int arrayLevelOffset, int prevArrayLevelOffset, int starCount, int maxNodes) {
+__global__ void createNodes(const uint64_t* mortonCodes,const float4* posMassVals, const uint32_t* flags,const uint32_t* previousFlags, const uint32_t* offsets, const uint32_t* offsetsPrev, node* nodes, int level, int arrayLevelOffset, int prevArrayLevelOffset, int starCount, int maxNodes) {
     int threadNum = threadIdx.x + blockDim.x * blockIdx.x;
     if (threadNum >= starCount) {return;}
 
@@ -86,7 +86,7 @@ __global__ void createNodes(const uint64_t* mortonCodes, const uint32_t* flags, 
         parent = 0;
     }
     else {
-        parent = prevArrayLevelOffset + offsetsPrev[threadNum];
+        parent = prevArrayLevelOffset + offsetsPrev[threadNum] + previousFlags[threadNum] - 1;
     }
     int childIndexNumber = pathFromRoot & 7; // The child index number is the bottom 3 bits of the morton coded path, so we just chop off every bit which isnt them.
     nodes[parent].child[childIndexNumber] = nodeIndex;
@@ -125,14 +125,16 @@ treeBuilder* sumCreate(int maxCount) {
     // Now I allocate the rest of the arrays for the treeBuilder:
     // flags,offsetsPing,offsetsPong,
 
-    uint32_t* flags; uint32_t* offsetsPing; uint32_t* offsetsPong;
+    uint32_t* flagsPing; uint32_t* flagsPong; uint32_t* offsetsPing; uint32_t* offsetsPong;
     size_t arraySize = sizeof(uint32_t) * maxCount;
 
-    cudaMalloc(&flags,arraySize);
+    cudaMalloc(&flagsPing,arraySize);
+    cudaMalloc(&flagsPong,arraySize);
     cudaMalloc(&offsetsPing,arraySize);
     cudaMalloc(&offsetsPong,arraySize);
 
-    sum->flags = flags;
+    sum->flagsPing = flagsPing;
+    sum->flagsPong = flagsPong;
     sum->offsetsPing = offsetsPing;
     sum->offsetsPong = offsetsPong;
 
@@ -140,7 +142,6 @@ treeBuilder* sumCreate(int maxCount) {
 }   
 
 void prefixSum(treeBuilder* builder, uint32_t* flags, uint32_t* offsets, int maxCount) {
-    
     if (builder == NULL) {
         printf("ERROR: treeBuilder struct passed to prefixSum() was uninitialised.\n");
         exit(-1);
@@ -162,7 +163,8 @@ void sumDestroyer(treeBuilder* sum) {
     if (sum == NULL) {printf("ERROR: Attempted to delete non-existant prefix sum object.\n"); exit(-1);}
 
     // Free cuda arrays
-    cudaFree(sum->flags);
+    cudaFree(sum->flagsPing);
+    cudaFree(sum->flagsPong);
     cudaFree(sum->offsetsPing);
     cudaFree(sum->offsetsPong);
     
@@ -337,3 +339,12 @@ __global__ void globalMinMaxReducer(const float3* __restrict__ minCorner, const 
     }
 }
 
+
+
+// =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
+// Tree traversal code
+// =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
+
+__global__ void calculateForce(node* nodes) {
+    return;
+}
