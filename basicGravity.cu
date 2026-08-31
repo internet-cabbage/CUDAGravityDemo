@@ -508,6 +508,7 @@ int main(void) {
     rootNode.nodePathFromRoot = (uint64_t) 0;
     rootNode.treeLevel = (int) 0;
     rootNode.firstParticleIndex = (int) 0;
+    rootNode.particleCount = (int) starCount;
     for (int c = 0; c < 8; c++) {
         rootNode.child[c] = -1;
     }
@@ -525,7 +526,10 @@ int main(void) {
     uint32_t* previousOffsets = prefixSumObject->offsetsPong;
     uint32_t* flags = prefixSumObject->flagsPing;
     uint32_t* previousFlags = prefixSumObject->flagsPong;
-    
+    int deepestNode = 1;
+
+    int arrayOffsetsArray[23] = {0};
+    int levelNodeCounts[23] = {0};
 
     for (int levels = 1; levels <= 21; levels++) {
         // Mark the index boundaries at which point the nodes start
@@ -542,8 +546,9 @@ int main(void) {
         //__global__ void createNodes(const uint64_t* mortonCodes, const uint32_t* flags, const uint32_t* offsets, const uint32_t* offsetsPrev, node* nodes, int level, int arrayLevelOffset, int prevArrayLevelOffset, int starCount, int maxNodes) {
 
         // Use the node boundaries to produce the node arrays
-        createNodes<<<integrateBlocks,THREADPERBLOCK>>>(cudaMortonCodesOut,cudaPositionMassValsSorted,flags,previousFlags,offsets,previousOffsets,CudaNodes,levels,arrayLevelOffset,previousArrayLevelOffset,starCount,maxNodes);
+        createNodes<<<integrateBlocks,THREADPERBLOCK>>>(cudaMortonCodesOut,flags,previousFlags,offsets,previousOffsets,CudaNodes,levels,arrayLevelOffset,previousArrayLevelOffset,starCount,maxNodes);
         cudaDeviceSynchronize();
+
 
         // Calculate how many nodes were spawned in the last createNodes call
         int nodeCount = 0;
@@ -570,6 +575,15 @@ int main(void) {
             exit(-1);
         }
         
+        // Update array of previous offsets and node counts
+        levelNodeCounts[levels] = nodeCount;
+        arrayOffsetsArray[levels] = arrayLevelOffset;
+
+        // Count particles
+        
+        updateTreeParticles<<<integrateBlocks,THREADPERBLOCK>>>(CudaNodes,arrayLevelOffset,nodeCount,starCount);
+
+        // add mass
 
         // update array offsets
         previousArrayLevelOffset = arrayLevelOffset;
@@ -584,8 +598,13 @@ int main(void) {
         uint32_t* tempSwapVal = previousFlags;
         previousFlags = flags;
         flags = tempSwapVal;
+        deepestNode++;
     }
     cudaDeviceSynchronize();
+    for (int j = deepestNode; j > 0; j--) {
+        // calculateForce()
+    }
+    printf("Deepest node: %d\n", deepestNode);
 
     printf("Starting to copy data from GPU to CPU\n");
     fflush(stdout);
@@ -623,15 +642,27 @@ int main(void) {
     }
     printf("\n\n");
 
-    for (int i = 0; i < 64; i++) {
-        printf("Node [%d] at level 2 is at index: %d\n", i, levelNodes[i]);
+    // Traverse tree to count nodes
+
+    int levelParticleCount[21] = {0};
+    int tempIndex = 0;
+    for (int i = 0; i < totalNodes; i++) {
+        tempIndex = CPUNodes[i].treeLevel;
+        levelParticleCount[tempIndex] += CPUNodes[i].particleCount;
+    }
+    for (int i = 0; i < 21; i++) {
+        printf("Node count from traversal at level [%d]: %d\n",i,levelParticleCount[i]);
     }
 
+    //for (int i = 0; i < 64; i++) {
+    //    printf("Node [%d] at level 2 is at index: %d\n", i, levelNodes[i]);
+    //}
+
     
-    printf("\n\n");
-    for (int i = 0; i < 23; i++) {
-        printf("Kids at level %d is: %d\n",i,childrenPerLevel[i]);
-    }
+    //printf("\n\n");
+    //for (int i = 0; i < 23; i++) {
+    //    printf("Kids at level %d is: %d\n",i,childrenPerLevel[i]);
+    //}
     
 
     printf("DRUMROLL, bmd bdm bdm bdm, there are %d many kids in the tree.\n",totalKids);

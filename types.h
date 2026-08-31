@@ -43,6 +43,7 @@ fields:
 
 typedef struct {
     uint64_t nodePathFromRoot;
+    int parentIndex;
     int firstParticleIndex; // The index in the sorted morton code array, at which point the particle(s) within this node start
     int particleCount; // How many particles are within the node
     

@@ -65,31 +65,149 @@ Each node in the tree is all a part of one giant array. So in order to different
 of the tree at that level. We will call this offset 'arrayLevelOffset' as we already have a variable called offset.
 */
 
-__global__ void createNodes(const uint64_t* mortonCodes,const float4* posMassVals, const uint32_t* flags,const uint32_t* previousFlags, const uint32_t* offsets, const uint32_t* offsetsPrev, node* nodes, int level, int arrayLevelOffset, int prevArrayLevelOffset, int starCount, int maxNodes) {
-    int threadNum = threadIdx.x + blockDim.x * blockIdx.x;
-    if (threadNum >= starCount) {return;}
+__global__ void updateTreeMass(node* nodes,const float4* positionMassVals, int level, int levelNodes, int levelStartIndex) {
+    int threadNum = threadIdx.x + (blockDim.x * blockIdx.x); 
+    int myNode = threadNum + levelStartIndex;
+    if (threadNum >= levelNodes) {return;}
+    
+    /* Check if this node is a leaf node, if so then the total mass is just the sum of the mass of all contained stars etc, and same goes for the CoM
+    just being the average position of the masses, weighted by mass.
+    */
+    bool isLeafNode = true;
+    for (int i = 0; i < 8; i++) {
+        if (nodes[myNode].child[i] != -1) {
+            isLeafNode = false;
+            break;
+        }
+    }
+    int particleCount = nodes[myNode].particleCount;
+    if (isLeafNode == true) {
+        int starIndex = 0;
+        // Iterates over all particles contained within the node
+        float3 weightedPositionVals = {0.0,0.0,0.0};
+        float totalMass = 0.0;
 
+        for (int i = 0; i < particleCount; i++) {
+            starIndex = nodes[myNode].firstParticleIndex + i;
+            // Copy data values to the temporary array
+            weightedPositionVals.x += positionMassVals[starIndex].x * positionMassVals[starIndex].w;
+            weightedPositionVals.y += positionMassVals[starIndex].y * positionMassVals[starIndex].w;
+            weightedPositionVals.z += positionMassVals[starIndex].z * positionMassVals[starIndex].w;
+
+            totalMass += positionMassVals[starIndex].w;
+        }
+        // Calculates the cente of mass
+        float4 massVals;
+        if (totalMass > 0.0) {
+            massVals.x = weightedPositionVals.x / totalMass;
+            massVals.y = weightedPositionVals.y / totalMass;
+            massVals.z = weightedPositionVals.z / totalMass;
+            massVals.w = totalMass; // Total mass is just the sum of all masses
+
+            // Now gives the node the mass value
+            nodes[myNode].massData = massVals;
+        }
+        else {
+            printf("ERROR: Total mass of node %d is zero.\n", threadNum);
+            nodes[myNode].massData = {0.0,0.0,0.0,0.0};
+        }
+
+    }
+
+    // Else, the node is not a leaf node, so we iterate over all its child nodes instead
+    else {
+        int childNodeCount = 0;
+        float4 nodeMassVals = {0.0,0.0,0.0,0.0};
+
+        // Node data array
+        int nodeIndexes[8];
+        for (int i = 0; i < 8; i++) {
+            if ((nodes[myNode]).child[i] != -1) {
+                // Stores the index of the child node into the nodeIndexes arra
+                nodeIndexes[childNodeCount] = (nodes[myNode]).child[i];
+                childNodeCount++;
+                // Add total mass
+            }
+        }
+        // Calculate total mass of node
+        for (int i = 0; i < childNodeCount; i++) {
+            // Updates the total mass by the mass of the child nodes
+            nodeMassVals.w += (nodes[nodeIndexes[i]]).massData.w;
+        }
+        // Calculates the centre of mass of the node
+        for (int i = 0; i < childNodeCount; i++) {
+            float4 nodeMass = (nodes[nodeIndexes[i]]).massData;
+            nodeMassVals.x += (nodeMass.x * nodeMass.w);
+            nodeMassVals.y += (nodeMass.y * nodeMass.w);
+            nodeMassVals.z += (nodeMass.z * nodeMass.w);
+        }
+        if (nodeMassVals.w > 0.0) {
+            nodeMassVals.x /= nodeMassVals.w;
+            nodeMassVals.y /= nodeMassVals.w;
+            nodeMassVals.z /= nodeMassVals.w;
+
+            nodes[myNode].massData = nodeMassVals;
+        }
+        else {
+            printf("ERROR: Total mass of node %d is zero.\n", threadNum);
+            nodes[myNode].massData = {0.0,0.0,0.0,0.0};
+        }
+
+    }
+
+}
+
+__global__ void updateTreeParticles(node* nodes, int levelStartIndex, int levelNodeCount, int starCount) {
+    int threadNum = threadIdx.x + (blockDim.x * blockIdx.x);
+    if (threadNum >= levelNodeCount) {return;}
+
+    int firstParticle = nodes[levelStartIndex + threadNum].firstParticleIndex;
+    int nextParticle = 0;
+
+    // Check if the 'firstParticle' is the last node in the array
+    if (threadNum == levelNodeCount - 1) {
+        nextParticle = starCount; // The last node contains all particles between the start of this node and the end of the array
+    }
+    // If 'firstParticle' is not the last node in the array, we find the index of the next node
+    else {
+        // The index position of the first particle in the next node
+        nextParticle = nodes[levelStartIndex + threadNum + 1].firstParticleIndex;
+        // The total particles in the node is just the difference between this and the first particle index of the node being checked
+    }
+
+    nodes[levelStartIndex + threadNum].particleCount = (nextParticle - firstParticle);
+}
+
+__global__ void createNodes(const uint64_t* mortonCodes, const uint32_t* flags,const uint32_t* previousFlags, const uint32_t* offsets, const uint32_t* offsetsPrev, node* nodes, int level, int arrayLevelOffset, int prevArrayLevelOffset, int starCount, int maxNodes) {
+    int threadNum = threadIdx.x + blockDim.x * blockIdx.x;
+    if (threadNum >= starCount) {return;} // Check if the thread corresponds to a star
     if (flags[threadNum]==0) {return;} // Not the start of a node
 
+    // Retrieve the star's tree path, so it can be added to the node it is inputted into
     uint64_t pathFromRoot = extractBitsFromLevel(mortonCodes[threadNum],level); 
     
     int nodeIndex = offsets[threadNum] + arrayLevelOffset; // The nodeIndex is basically just a value which identifies each node at a given level of the tree
     if (nodeIndex >= maxNodes) {return;}
+
+    // Writes all the node's data to the node array
     nodes[nodeIndex].nodePathFromRoot = pathFromRoot;
     nodes[nodeIndex].treeLevel = level;
     nodes[nodeIndex].firstParticleIndex = threadNum;
     for (int kid = 0; kid < 8; kid++) {nodes[nodeIndex].child[kid] = -1;} // Initialise all the nodes kids to -1 to signify they are currently empty
 
     // Add info to parent node
-    int parent;
+    int parent; // The index location of the parent node
     if (level == 1) { // The node is the level before the root, so its parent is just the root node
         parent = 0;
     }
     else {
+        // The offsets value is equal to the parent node of the node at that index, as long as the flag value is 1. Otherwise it is 1 too high
+        // This corrects that, so that the node can know what it's parent is.
         parent = prevArrayLevelOffset + offsetsPrev[threadNum] + previousFlags[threadNum] - 1;
     }
     int childIndexNumber = pathFromRoot & 7; // The child index number is the bottom 3 bits of the morton coded path, so we just chop off every bit which isnt them.
     nodes[parent].child[childIndexNumber] = nodeIndex;
+    nodes[nodeIndex].parentIndex = parent;
 }  
 
 // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
