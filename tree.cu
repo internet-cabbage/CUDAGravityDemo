@@ -108,7 +108,7 @@ __global__ void updateTreeMass(node* nodes,const float4* positionMassVals, int l
             nodes[myNode].massData = massVals;
         }
         else {
-            printf("ERROR: Total mass of node %d is zero.\n", threadNum);
+            printf("ERROR: Total mass of node %d is zero, and particle count is %d.\n", threadNum, particleCount);
             nodes[myNode].massData = {0.0,0.0,0.0,0.0};
         }
 
@@ -463,6 +463,19 @@ __global__ void globalMinMaxReducer(const float3* __restrict__ minCorner, const 
 // Tree traversal code
 // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
 
-__global__ void calculateForce(node* nodes) {
-    return;
+
+/*
+This is some code 
+
+This function will calculate the force acting on a particle, from all other particles in the N-body system. It will
+start at the root node, and traverse the tree in a depth first search until it either reaches a leaf node, or reaches a node far enough away to apply the approximation.
+
+Actually scratch that, that is just wishful thinking. I do not believe myself capable of implementing that.
+
+*/
+
+// Calculate the force acting on a given particle
+__global__ void calculateForce(node* nodes, float antiSingularitySquared, float G, float theta, int starCount) {
+    int threadNum = threadIdx.x + (blockDim.x * blockIdx.x);
+    if (threadNum >= starCount) {return;}
 }

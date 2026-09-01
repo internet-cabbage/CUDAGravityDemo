@@ -6,15 +6,11 @@
 #include <stddef.h>
 #include <stdlib.h>
 
+#include "types.h"
 
 __global__ void reorderParticles(const float4* __restrict__ posMassValsIn, const float3* __restrict__ velValsIn, float4* posMassValsOut, float3* velValsOut, uint32_t* originalIndex, int starCount);
 
 extern "C" {
-typedef struct {
-    void* tempStorage;
-    size_t tempStorageBytes;
-    int capacity;
-} radixSorter;
 
 radixSorter* sorterCreate(int maxCount);
 

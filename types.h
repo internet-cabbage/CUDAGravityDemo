@@ -17,6 +17,12 @@ typedef struct {
 } RGB;
 
 typedef struct {
+    void* tempStorage;
+    size_t tempStorageBytes;
+    int capacity;
+} radixSorter;
+
+typedef struct {
     // The coordinates of the corner with the minimum values
     float minX, minY, minZ;
 
@@ -64,6 +70,25 @@ typedef struct {
     uint32_t* offsetsPing;
     uint32_t* offsetsPong;
 } treeBuilder;
+
+typedef struct {
+    node* nodes;
+    int maxNodes;
+    uint64_t* mortonIn; uint64_t* mortonOut;
+    uint32_t* indexIn; uint32_t* indexOut;
+    float3* boundingData[4]; // An array of pointers to the bounding data stored on the GPU
+    radixSorter* sorter;
+    treeBuilder* builder;
+    int levelOffsets[22];
+    int levelCount[22];
+    int deepestLevel;
+    int treeBlocks; // Blocks to run on the GPU
+    int starCount;
+    float4* sortedPosMassVals;
+    float3* sortedVelVals;
+} treeState;
+
+
 
 
 #endif
