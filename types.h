@@ -26,7 +26,9 @@ typedef struct {
     // The coordinates of the corner with the minimum values
     float minX, minY, minZ;
 
-    // The extent is the largest of the width/height/depth values of the cube.
+    float extent;
+    // The extent is the largest of the width/height/depth values of the cube. This is then used to create a scaling factor called 'scale'
+    // which is used to map each of the position values, to an integer grid in the range [0,2^21].
     // The scale is then multiplied by 2^21, which is equal to a multiplication by 1 << 21.
     float scale;
 } worldBox;

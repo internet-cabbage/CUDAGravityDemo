@@ -142,6 +142,11 @@ ln(2u) / -τ = Z
 
 
 
+
+/*
+Laplace dsitribution for the thickness of the galactic disc
+A laplace distribution is a fancy term for what is effectively just two exponential distributions in opposite directions joined together at the middle.
+*/
 float sampleHeight(float scaleThickness) {
     float tau = 1.0f / scaleThickness;
     float u = randDecimal();

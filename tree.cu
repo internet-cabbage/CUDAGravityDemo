@@ -464,6 +464,53 @@ __global__ void globalMinMaxReducer(const float3* __restrict__ minCorner, const 
 // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
 
 
+// Calculates the size of a node at a given depth
+
+__device__ float calculateNodeSize(treeState* tree,int level) {
+    float boxExtent;
+    float3* lowerBoxBounds = tree->boundingData[2];
+    float3* upperBoxBounds = tree->boundingData[3];
+
+    boxExtent = upperBoxBounds->x - lowerBoxBounds->x;
+
+    // Check for irregular box size;
+    float xSize = upperBoxBounds->x - lowerBoxBounds->x;
+    float ySize = upperBoxBounds->y - lowerBoxBounds->y;
+    float zSize = upperBoxBounds->z - lowerBoxBounds->z;
+
+    float xyDif = abs(xSize - ySize);
+    float xzDif = abs(xSize - zSize);
+    float yzDif = abs(ySize - zSize);
+
+    if (xyDif > 1.0 || xzDif > 1.0 || yzDif > 1.0) {
+        printf("ERROR: Irregular bounding box size detected.\n");
+    }
+    else{
+        printf("Bounding box size test still enabled.");
+    }
+
+
+    float nodeSize = boxExtent / (pow(2,level));
+
+    return nodeSize;
+}
+
+__device__ inline bool isLeafCalc(node* n) {
+    int childrenContained = 0;
+    for (int i = 0; i < 8; i++) {
+        if (n->child[i] != -1) {
+            childrenContained++;
+        }
+    }
+    if (childrenContained == 0) {
+        return true;
+    }
+    else {
+        return false;
+    }
+}
+
+
 /*
 This is some code 
 
@@ -472,10 +519,126 @@ start at the root node, and traverse the tree in a depth first search until it e
 
 Actually scratch that, that is just wishful thinking. I do not believe myself capable of implementing that.
 
+
+I will grab a handful of 32 stars (equal to the warp size), and measure the distance between each star in the handful and the stars with index[threadNUM]. If all of them meet the approximation criteria it is applied,
+otherwise I will traverse the tree until it is met by all stars. This is to minimise thread divergence, which would massively slow down my program.
+
 */
 
 // Calculate the force acting on a given particle
-__global__ void calculateForce(node* nodes, float antiSingularitySquared, float G, float theta, int starCount) {
+// This must be called to run across 32 threads
+__global__ void calculateAcceleration(const float4* __restrict__ positionMassArray, node* nodes, treeState* tree, float3* accelVals, float antiSingularitySquared, float G, float theta, int starCount) {
     int threadNum = threadIdx.x + (blockDim.x * blockIdx.x);
-    if (threadNum >= starCount) {return;}
+    /*if (threadNum >= starCount) {return;}
+
+    Let the above commented about code be a warning to myself, since all threads must agree in order to traverse deeper in the tree. Any early returns will halt the entire
+    process, so I cannot do that. Instead I will have a boolean flag which must be true for the thread to actually write anything
+    */
+    bool validThread = true;
+    float4 myPos = make_float4(0.0,0.0,0.0,0.0);
+    // An accumulator used to sum the accelerations acting on the star
+    float3 myAccel = make_float3(0.0,0.0,0.0);
+
+    if (threadNum >= starCount) {
+        validThread = false;
+    }
+    else {
+        myPos = positionMassArray[threadNum];
+    }
+
+    // The maximum size of the stack is just going to be the maximum depth * the number of child nodes per node
+    // This would be 8 * 21 = 168
+    // TODO This is actually an overestimate, research how to make it a bit smaller
+    __shared__ int stack[168];
+    int stackTop = -1; // Index of top element
+    
+
+    // Start from the root node of the tree, and test the opening criteria. Then repeatedly descend until each thread agrees with the opening criteria
+    // Pop first level nodes onto the stack
+
+    for (int i = 0; i < 8; i++) {
+        int child = nodes[0].child[i];
+        if (child != -1) {
+            stackTop++;
+            stack[stackTop] = nodes[0].child[i];
+        }
+    }
+
+    while (stackTop >= 0) {
+        // Current node is just the node at the top of the stack
+        int nodeIndex = stack[stackTop];
+
+
+        // n stores the data of the node that has been popped off the stack
+        node n = nodes[nodeIndex];
+        
+
+        // Delta is the distance between the node's COM and the star assigned to this thread
+        float3 delta = make_float3((myPos.x - n.massData.x),(myPos.y - n.massData.y),(myPos.z - n.massData.z));
+        float distanceSqr = (delta.x * delta.x) + (delta.y * delta.y) + (delta.z * delta.z);
+        // MAC stands for Multipole Acceptance Criteria, which determines whether the approximation is applied or not
+        // MAC is usually nodesize / distance > theta. But we can square all sides to speed it up a tad
+        
+        float nodeSize = calculateNodeSize(tree,n.treeLevel);
+        
+        bool wantToDescend;
+        /*
+        The thread does not want to descend if any of the following criteria are met:
+            1) The MAC is met, so the approximation can be applied
+            2) The thread is not a valid thread, and should not contribute to the descent vote
+            3) It is not possible to descend as i.e. the node does not have any child nodes
+        
+        */
+
+        // Check if the node is a leaf node
+        bool isLeaf = isLeafCalc(&n);
+
+        if (((nodeSize * nodeSize) < (theta * theta) * distanceSqr) || (validThread == false) || (isLeaf == true)) {
+            wantToDescend = false;
+        }
+        else {
+            wantToDescend = true;
+        }
+
+        __syncwarp();
+        // If any thread wants to descend, we descend to a lower node. But beforehand we push each unvisited node on that level to the stack.
+        // We keep the stackTop decrementer outside of the loop, so that if it is accepted, the force calculator is still able to move onto another node
+        stackTop--;
+        if (__any_sync(0xffffffff,wantToDescend)) {
+            // Pop the last element off the stack.
+            // Then push all the unvisited nodes to the stack.
+            __syncwarp();
+            for (int i = 0; i < 8; i++) {
+                if (n.child[i] != -1) {
+                    stackTop++;
+                    stack[stackTop] = n.child[i];
+                }
+            }
+            continue;
+        }
+        /* If the program has reached this stage of the control flow, no descent was requested by any of the above threads.
+        This means we can now start evaluating the nodes / stars at this level, to calculate the force.
+        */
+
+        
+        /* If the star is comparing itself against intself, it's 'delta' value will be astronomically low, so it will effectively contribute no acceleration
+        Therefore I do not need to do any specific handling for the case where a thread is calculating the force exerted by it's star on it's star.
+        */
+        float accelMag;
+        float mass = n.massData.w;
+        // Regardless of whether the node is a leaf node or not, it should still have the same mass,d ue to the way the mass propagation has been set up.
+
+        accelMag = - (G * (mass)) / (distanceSqr + antiSingularitySquared);
+        float distance = sqrtf(distanceSqr + antiSingularitySquared);
+        myAccel.x += accelMag * (delta.x/distance);
+        myAccel.y += accelMag * (delta.y/distance);
+        myAccel.z += accelMag * (delta.z/distance);
+
+    }
+
+    // Now we can write the acceleration buffer value to the main acceleration array
+    if (validThread == true) {
+        accelVals[threadNum] = myAccel;
+    }
 }
+

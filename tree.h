@@ -14,6 +14,7 @@
 
 #define BOXTHREADS 256
 #define BOXBLOCKS 256
+#define WARPTHREADS 32
 
 __global__ void mortonEncode(const float4* posMassVals, uint64_t* mortonCodes, uint32_t* originalIndex, int NStars, worldBox rootBox);
 

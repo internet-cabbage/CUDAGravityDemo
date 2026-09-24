@@ -94,6 +94,7 @@ void createWorldBox(const float4* cudaPositionMassVals, const int starCount,
 
     // Now we actually assign these values to the worldBox
 
+    outputWorldBox->extent = extent;
     outputWorldBox->minX = minCorner.x;
     outputWorldBox->minY = minCorner.y;
     outputWorldBox->minZ = minCorner.z;
@@ -650,16 +651,15 @@ int main(void) {
     progressPrinter(tSteps,0,40,0);
 
     /*
-    Process:
+    Main loop process:
         1) Start time profiling
-        2) Produce the new worldBox bounding box
-        3) Calculate the morton codes of the stars
-        4) Radix sort the stars via their morton codes
-        5) Use the sorted codes to produce the Barnes-Hutt tree in parallel
-        6) Traverse the Barnes-Hutt tree to calculate the force acting on the particles
-        7) Integrate the force steps to move the stars
-        8) Check if the frame should be written to data
-        9) Repeat
+        2) Create new tree
+        3) Traverse tree to calculate accelerations of each star
+        4) Integrate accelerations to calculate new position and velocity
+        5) Check if frame should be written to data
+            a) Call save frame function
+        6) Finish time profiling
+        7) Repeat
     */
 
     treeState* state = (treeState*) calloc(1,sizeof(treeState));
