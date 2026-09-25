@@ -10,5 +10,8 @@ Units:
 
 
 */
-#define G 1.0f
+
+float G = 1.0f;
+float theta = 0.7f;
+
 #endif
