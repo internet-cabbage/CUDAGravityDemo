@@ -38,5 +38,5 @@ clean:
 push:
 	rsync -av --partial --progress outputDump.bin luthaisb@100.80.190.16:~/Code/C++/OpenGL/BasicLighting/data
 
-memCheck:
-	$(NVCC) -Xptxas -v $(SRCFILES)
+memCheck: $(SRCFILES)
+	$(NVCC) $(NVCCFLAGS) -Xptxas -v $(STD) $(ARCH) $(DEBUG) $(WARNINGS) $^ -o $(TARGET)
