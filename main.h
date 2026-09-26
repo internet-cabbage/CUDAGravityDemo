@@ -18,6 +18,7 @@ extern "C" {
 #include "sorting.h"
 #include "units.h"
 #include "macros.h"
+#include "sys/sysinfo.h"
 
 
 #define THREADCOARSENING 2

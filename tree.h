@@ -10,7 +10,7 @@
 
 
 #include "types.h"
-#include "units.h"
+#include "macros.h"
 
 
 #define BOXTHREADS 256
@@ -31,7 +31,7 @@ __global__ void updateTreeParticles(node* nodes, int levelStartIndex, int levelN
 
 __global__ void updateTreeMass(node* nodes,const float4* positionMassVals, int level, int levelNodes, int levelStartIndex);
 
-__global__ void calculateAcceleration(const float4* __restrict__ positionMassArray, treeState* tree, float3* accelVals, float antiSingularitySquared, float GVal, float theta, int starCount);
+__global__ void calculateAcceleration(const float4* __restrict__ positionMassArray, treeState tree, float3* accelVals, float* antiSingularitySquaredPointer, float* GValPointer, float* thetaPointer, int starCount);
 
 __global__ void positionUpdater(float4* positionMassArray, float3* velocityVals, float3* accelerationVals, int starCount, int timeStep);
 

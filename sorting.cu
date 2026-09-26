@@ -35,7 +35,10 @@ radixSorter* sorterCreate(int maxCount) {
 
     // Initialise the radix sorter, and check it for errors (I should probably do this more)
 
-    cudaError_t radixError = cub::DeviceRadixSort::SortPairs(nullptr,sorter->tempStorageBytes,
+    void* tempStorage = nullptr;
+    size_t tempStorageBytes = 0;
+
+    cudaError_t radixError = cub::DeviceRadixSort::SortPairs(tempStorage,tempStorageBytes,
             nullKeys,nullKeys,
             nullVals,nullVals,maxCount);
 
@@ -80,7 +83,7 @@ void sorterDestroyer(radixSorter* sorter) {
         printf("ERROR: Attempted to delete non-existant sorter.\n");
         exit(-1);
     }
-    cudaFree(sorter->tempStorage);
+    CUDA_CHECK(cudaFree(sorter->tempStorage));
     // Makes the crash more obvious if it is called elsewhere
     sorter->tempStorage = NULL;
     sorter->tempStorageBytes = (size_t) 0;

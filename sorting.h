@@ -7,6 +7,7 @@
 #include <stdlib.h>
 
 #include "types.h"
+#include "macros.h"
 
 __global__ void reorderParticles(const float4* __restrict__ posMassValsIn, const float3* __restrict__ velValsIn, float4* posMassValsOut, float3* velValsOut, uint32_t* originalIndex, int starCount);
 

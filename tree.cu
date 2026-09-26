@@ -246,10 +246,10 @@ treeBuilder* sumCreate(int maxCount) {
     uint32_t* flagsPing; uint32_t* flagsPong; uint32_t* offsetsPing; uint32_t* offsetsPong;
     size_t arraySize = sizeof(uint32_t) * maxCount;
 
-    cudaMalloc(&flagsPing,arraySize);
-    cudaMalloc(&flagsPong,arraySize);
-    cudaMalloc(&offsetsPing,arraySize);
-    cudaMalloc(&offsetsPong,arraySize);
+    CUDA_CHECK(cudaMalloc(&flagsPing,arraySize));
+    CUDA_CHECK(cudaMalloc(&flagsPong,arraySize));
+    CUDA_CHECK(cudaMalloc(&offsetsPing,arraySize));
+    CUDA_CHECK(cudaMalloc(&offsetsPong,arraySize));
 
     sum->flagsPing = flagsPing;
     sum->flagsPong = flagsPong;
@@ -281,10 +281,10 @@ void sumDestroyer(treeBuilder* sum) {
     if (sum == NULL) {printf("ERROR: Attempted to delete non-existant prefix sum object.\n"); exit(-1);}
 
     // Free cuda arrays
-    cudaFree(sum->flagsPing);
-    cudaFree(sum->flagsPong);
-    cudaFree(sum->offsetsPing);
-    cudaFree(sum->offsetsPong);
+    CUDA_CHECK(cudaFree(sum->flagsPing));
+    CUDA_CHECK(cudaFree(sum->flagsPong));
+    CUDA_CHECK(cudaFree(sum->offsetsPing));
+    CUDA_CHECK(cudaFree(sum->offsetsPong));
     
     // Dereference pointers
     sum->capacity = 0;
@@ -481,13 +481,14 @@ __device__ float calculateNodeSize(treeState* tree,int level) {
     float xyDif = abs(xSize - ySize);
     float xzDif = abs(xSize - zSize);
     float yzDif = abs(ySize - zSize);
-
+    /*
     if (xyDif > 1.0 || xzDif > 1.0 || yzDif > 1.0) {
         printf("ERROR: Irregular bounding box size detected.\n");
     }
     else{
         printf("Bounding box size test still enabled.");
     }
+    */
 
 
     float nodeSize = boxExtent / (pow(2,level));
@@ -527,10 +528,18 @@ otherwise I will traverse the tree until it is met by all stars. This is to mini
 
 // Calculate the force acting on a given particle
 // This must be called to run across 32 threads
-__global__ void calculateAcceleration(const float4* __restrict__ positionMassArray, node* nodes, treeState* tree, float3* accelVals, float antiSingularitySquared, float G, float theta, int starCount) {
+__global__ void calculateAcceleration(const float4* __restrict__ positionMassArray, treeState tree, float3* accelVals, float* antiSingularitySquaredPointer, float* GValPointer, float* thetaPointer, int starCount) {
     int threadNum = threadIdx.x + (blockDim.x * blockIdx.x);
-    /*if (threadNum >= starCount) {return;}
 
+    float theta = *thetaPointer;
+    float antiSingularitySquared = *antiSingularitySquaredPointer;
+    float GVal = *GValPointer;
+
+    // Pointer variables used to make easier reference to other values
+    node* nodes = tree.nodes;
+
+
+    /*if (threadNum >= starCount) {return;}
     Let the above commented about code be a warning to myself, since all threads must agree in order to traverse deeper in the tree. Any early returns will halt the entire
     process, so I cannot do that. Instead I will have a boolean flag which must be true for the thread to actually write anything
     */
@@ -567,19 +576,16 @@ __global__ void calculateAcceleration(const float4* __restrict__ positionMassArr
     while (stackTop >= 0) {
         // Current node is just the node at the top of the stack
         int nodeIndex = stack[stackTop];
-
-
         // n stores the data of the node that has been popped off the stack
         node n = nodes[nodeIndex];
-        
-
+    
         // Delta is the distance between the node's COM and the star assigned to this thread
         float3 delta = make_float3((myPos.x - n.massData.x),(myPos.y - n.massData.y),(myPos.z - n.massData.z));
         float distanceSqr = (delta.x * delta.x) + (delta.y * delta.y) + (delta.z * delta.z);
         // MAC stands for Multipole Acceptance Criteria, which determines whether the approximation is applied or not
         // MAC is usually nodesize / distance > theta. But we can square all sides to speed it up a tad
         
-        float nodeSize = calculateNodeSize(tree,n.treeLevel);
+        float nodeSize = calculateNodeSize(&tree,n.treeLevel);
         
         bool wantToDescend;
         /*
@@ -628,7 +634,7 @@ __global__ void calculateAcceleration(const float4* __restrict__ positionMassArr
         float mass = n.massData.w;
         // Regardless of whether the node is a leaf node or not, it should still have the same mass,d ue to the way the mass propagation has been set up.
 
-        accelMag = - (G * (mass)) / (distanceSqr + antiSingularitySquared);
+        accelMag = - (GVal * (mass)) / (distanceSqr + antiSingularitySquared);
         float distance = sqrtf(distanceSqr + antiSingularitySquared);
         myAccel.x += accelMag * (delta.x/distance);
         myAccel.y += accelMag * (delta.y/distance);
@@ -642,3 +648,29 @@ __global__ void calculateAcceleration(const float4* __restrict__ positionMassArr
     }
 }
 
+__global__ void positionUpdater(float4* positionMassArray, float3* velocityVals, float3* accelerationVals, int starCount, int timeStep) {
+    int threadNum = threadIdx.x + (blockDim.x * blockIdx.x);
+
+    // Invalid star checker
+    if (threadNum >= starCount) {
+        return;
+    }
+
+    // New velocity calculator
+    float3 myVel = velocityVals[threadNum];
+    float4 myPosMass = positionMassArray[threadNum];
+
+    /*  Apply the symplectic-euler method to calculate the next position.
+        i.e. kick the stars then let them drift etc
+    */
+
+    // Update velocity values
+    velocityVals[threadNum].x = myVel.x + (accelerationVals[threadNum].x * timeStep);
+    velocityVals[threadNum].y = myVel.y + (accelerationVals[threadNum].y * timeStep);
+    velocityVals[threadNum].z = myVel.z + (accelerationVals[threadNum].z * timeStep);
+
+    // Update position values
+    positionMassArray[threadNum].x = myPosMass.x + (positionMassArray[threadNum].x * timeStep);
+    positionMassArray[threadNum].y = myPosMass.y + (positionMassArray[threadNum].y * timeStep);
+    positionMassArray[threadNum].z = myPosMass.z + (positionMassArray[threadNum].z * timeStep);
+} 

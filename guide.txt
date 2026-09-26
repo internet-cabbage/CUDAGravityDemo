@@ -16,3 +16,20 @@ tmux kill-session -t sim
 // Scroll mode
 
 Ctrl-b [
+
+// ===================================
+// DEBUGGING
+// ===================================
+
+To debug I follow the process:
+    1) make debug, to create an executable with debug information
+    2.) If it is a CPU-side error, this is usually enough. But if it is related to the GPU or the interface between the CPU and GPU,
+    I have to perform alternative measures.
+    3.) Firstly try make memcheck, make initcheck, and make racecheck, to try and check for basic errors. Most likely nothing will be found,
+    and I have to move onto the next stage.
+    4.) using cuda-gdb to run the executable file. 'cuda-gdb gravitySim', then enter 'run' to run it.
+    Now that it has been run I can use a few features to debug:
+        a) 'bt', which backtraces and shows me what function the crash occured in, and how it was entered.
+        b) 'list', shows the lines of code around the crash
+        c) 'info locals', prints the values of all the variables at the moment of the crash
+        d) 'print var', prints the value of the variable with name 'var'
