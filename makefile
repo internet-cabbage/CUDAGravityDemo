@@ -40,7 +40,7 @@ initcheck:
 clean: 
 	rm -f $(TARGET)
 push:
-	rsync -av --partial --progress outputDump.bin luthaisb@100.80.190.16:~/Code/C++/OpenGL/BasicLighting/data
+	rsync -av --partial --progress outputDump.bin [ADD DIRECTORY PATH AND IP HERE]
 
 memCheck: $(SRCFILES)
 	$(NVCC) $(NVCCFLAGS) -Xptxas -v $(STD) $(ARCH) $(DEBUG) $(WARNINGS) $^ -o $(TARGET)
