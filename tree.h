@@ -33,7 +33,7 @@ __global__ void updateTreeMass(node* nodes,const float4* positionMassVals, int l
 
 __global__ void calculateAcceleration(const float4* __restrict__ positionMassArray, treeState tree, float3* accelVals, float* antiSingularitySquaredPointer, float* GValPointer, float* thetaPointer, int starCount);
 
-__global__ void positionUpdater(float4* positionMassArray, float3* velocityVals, float3* accelerationVals, int starCount, int timeStep);
+__global__ void positionUpdater(float4* positionMassArray, float3* velocityVals, float3* accelerationVals, int starCount, float timeStep);
 
 void prefixSum(treeBuilder* builder, uint32_t* flags, uint32_t* offsets, int maxCount);
 

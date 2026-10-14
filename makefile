@@ -40,7 +40,14 @@ initcheck:
 clean: 
 	rm -f $(TARGET)
 push:
-	rsync -av --partial --progress outputDump.bin [ADD DIRECTORY PATH AND IP HERE]
+	rsync -av --partial --progress outputDump.bin luthaisb@100.80.190.16:~/Code/C++/OpenGL/BasicLighting/data
 
 memCheck: $(SRCFILES)
 	$(NVCC) $(NVCCFLAGS) -Xptxas -v $(STD) $(ARCH) $(DEBUG) $(WARNINGS) $^ -o $(TARGET)
+# https://intro-to-cuda.readthedocs.io/en/latest/tutorial/profiling.html
+# Used as a source for this option
+profile:
+	nsys profile --stats=true \
+	--trace=cuda,nvtx,osrt \
+	--cuda-memory-usage=true
+	./$(TARGET)

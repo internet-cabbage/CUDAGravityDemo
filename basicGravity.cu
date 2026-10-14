@@ -1,6 +1,7 @@
 #include "main.h"
 
-
+/* The tree state is a datastructure stored on the CPU which contains pointers to all the different parts of the tree in the GPU's memory.
+*/
 void initialiseTree(treeState* state, int starCount, int paddedStarCount, int integrateBlocks) {
     // Create radix sorter
     radixSorter* sorter = sorterCreate(starCount);
@@ -11,10 +12,10 @@ void initialiseTree(treeState* state, int starCount, int paddedStarCount, int in
 
     // Initial worldbox creation
     float3* cudaMinCorner; float3* cudaMaxCorner; float3* cudaOutputMin; float3* cudaOutputMax;
-    cudaMalloc(&cudaMinCorner,sizeof(float3)*BOXBLOCKS);
-    cudaMalloc(&cudaMaxCorner,sizeof(float3)*BOXBLOCKS);
-    cudaMalloc(&cudaOutputMin,sizeof(float3));
-    cudaMalloc(&cudaOutputMax,sizeof(float3));
+    CUDA_CHECK(cudaMalloc(&cudaMinCorner,sizeof(float3)*BOXBLOCKS));
+    CUDA_CHECK(cudaMalloc(&cudaMaxCorner,sizeof(float3)*BOXBLOCKS));
+    CUDA_CHECK(cudaMalloc(&cudaOutputMin,sizeof(float3)));
+    CUDA_CHECK(cudaMalloc(&cudaOutputMax,sizeof(float3)));
 
     // Define tree state
     state->sorter = sorter;
@@ -23,7 +24,7 @@ void initialiseTree(treeState* state, int starCount, int paddedStarCount, int in
     state->maxNodes = maxTreeNodes;
 
     node* cudaNodes;
-    cudaMalloc(&cudaNodes,sizeof(node)*maxTreeNodes);
+    CUDA_CHECK(cudaMalloc(&cudaNodes,sizeof(node)*maxTreeNodes));
     state->nodes = cudaNodes;
     state->treeBlocks = integrateBlocks;
 
@@ -32,10 +33,10 @@ void initialiseTree(treeState* state, int starCount, int paddedStarCount, int in
     uint64_t* cudaMortonIn; uint64_t* cudaMortonOut;
     uint32_t* cudaIndexIn; uint32_t* cudaIndexOut;
 
-    cudaMalloc(&cudaMortonIn,sizeof(*cudaMortonIn)*starCount);
-    cudaMalloc(&cudaMortonOut,sizeof(*cudaMortonOut)*starCount);
-    cudaMalloc(&cudaIndexIn,sizeof(*cudaIndexIn)*starCount);
-    cudaMalloc(&cudaIndexOut,sizeof(*cudaIndexOut)*starCount);
+    CUDA_CHECK(cudaMalloc(&cudaMortonIn,sizeof(*cudaMortonIn)*starCount));
+    CUDA_CHECK(cudaMalloc(&cudaMortonOut,sizeof(*cudaMortonOut)*starCount));
+    CUDA_CHECK(cudaMalloc(&cudaIndexIn,sizeof(*cudaIndexIn)*starCount));
+    CUDA_CHECK(cudaMalloc(&cudaIndexOut,sizeof(*cudaIndexOut)*starCount));
 
     state->mortonIn = cudaMortonIn;
     state->mortonOut = cudaMortonOut;
@@ -46,13 +47,22 @@ void initialiseTree(treeState* state, int starCount, int paddedStarCount, int in
     
     float4* cudaPosMassVals;
     float3* cudaVelVals;
-    cudaMalloc(&cudaPosMassVals,sizeof(cudaPosMassVals[0])*paddedStarCount);
-    cudaMalloc(&cudaVelVals,sizeof(cudaVelVals[0])*paddedStarCount);
+    CUDA_CHECK(cudaMalloc(&cudaPosMassVals,sizeof(cudaPosMassVals[0])*paddedStarCount));
+    CUDA_CHECK(cudaMalloc(&cudaVelVals,sizeof(cudaVelVals[0])*paddedStarCount));
     // Zero the arrays
-    cudaMemset(cudaPosMassVals,0,sizeof(cudaPosMassVals[0])*paddedStarCount);
-    cudaMemset(cudaVelVals,0,sizeof(cudaVelVals[0])*paddedStarCount);
+    CUDA_CHECK(cudaMemset(cudaPosMassVals,0,sizeof(cudaPosMassVals[0])*paddedStarCount));
+    CUDA_CHECK(cudaMemset(cudaVelVals,0,sizeof(cudaVelVals[0])*paddedStarCount));
     state->sortedPosMassVals = cudaPosMassVals;
     state->sortedVelVals = cudaVelVals;
+
+    // Initialise the array of original indices
+    uint32_t* tempArray = (uint32_t*) calloc(starCount, sizeof(uint32_t));
+    for (int i = 0; i < starCount; i++) {
+        tempArray[i] = i;
+        printf("tempArray[%d]: %d",i,tempArray[i]);
+    }
+    cudaMemcpy(cudaIndexIn,tempArray,sizeof(uint32_t)*starCount,cudaMemcpyHostToDevice);
+    free(tempArray);
 
 
 
@@ -74,13 +84,14 @@ void createWorldBox(const float4* cudaPositionMassVals, const int starCount,
     float3 minCorner, maxCorner;
     localMinMaxFinder<<<BOXBLOCKS,BOXTHREADS>>>(cudaPositionMassVals,starCount,cudaMinCorner,cudaMaxCorner);
     globalMinMaxReducer<<<1,BOXTHREADS>>>(cudaMinCorner,cudaMaxCorner,BOXBLOCKS,cudaOutputMin,cudaOutputMax);
-    cudaMemcpy(&minCorner,cudaOutputMin,sizeof(float3),cudaMemcpyDeviceToHost);
-    cudaMemcpy(&maxCorner,cudaOutputMax,sizeof(float3),cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(&minCorner,cudaOutputMin,sizeof(float3),cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(&maxCorner,cudaOutputMax,sizeof(float3),cudaMemcpyDeviceToHost));
 
     float width = maxCorner.x - minCorner.x;
     float height = maxCorner.y - minCorner.y;
     float depth = maxCorner.z - minCorner.z;
     float extent = fmaxf(width, fmaxf(height,depth));
+    //printf("Min: (%e,%e,%e), Max: (%e,%e,%e), Extent: %f\n", minCorner.x,minCorner.y,minCorner.z,maxCorner.x,maxCorner.y,maxCorner.z,extent);
 
     /*
     The binary representation of the integer 1 is: 0000...0001
@@ -101,7 +112,7 @@ void createWorldBox(const float4* cudaPositionMassVals, const int starCount,
     outputWorldBox->scale = scale;
 }
 
-
+// Takes a CPU Tree as input, and builds a CUDA one
 void buildTree(treeState* tree, float4** cudaPosMasVals, float3** cudaVelVals) {
     /*  Tree building process:
         - 1) Calculate bounding box.
@@ -167,8 +178,9 @@ void buildTree(treeState* tree, float4** cudaPosMasVals, float3** cudaVelVals) {
     uint32_t* cudaOriginalIndexIn = tree->indexIn; // The index / star id of the star whose morton code is being found
     uint32_t* cudaOriginalIndexOut = tree->indexOut;
 
-
     mortonEncode<<<treeBlocks,THREADPERBLOCK>>>(*cudaPosMasVals,cudaMortonCodesIn,cudaOriginalIndexIn,starCount,rootBox);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     // ==========
     // Stage 3
@@ -176,7 +188,31 @@ void buildTree(treeState* tree, float4** cudaPosMasVals, float3** cudaVelVals) {
 
     // Sorts the input arrays (cudaMortonCodesIn, cudaOriginalIndexIn) and outputs them to (cudaMortonCodesOut, cudaOriginalIndexOut)
     radixSorter* sorterObject = tree->sorter;
+
+    // Sorter input data print
+    printf("Sorter capacity: %d, storagePointer: %p, storageBytes: %zu\n", sorterObject->capacity, sorterObject->tempStorage, sorterObject->tempStorageBytes); 
+    
+
     radixSortPairs(sorterObject,cudaMortonCodesIn,cudaMortonCodesOut,cudaOriginalIndexIn,cudaOriginalIndexOut,starCount);
+
+    // ==================================
+    // Test block, print every particle
+    /*
+    uint32_t* CPUOriginalIndexOut = (uint32_t*) calloc(starCount,sizeof(uint32_t));
+    uint32_t* CPUOriginalIndexIn = (uint32_t*) calloc(starCount,sizeof(uint32_t));
+    CUDA_CHECK(cudaMemcpy(CPUOriginalIndexOut,cudaOriginalIndexOut,sizeof(uint32_t)*starCount,cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(CPUOriginalIndexIn,cudaOriginalIndexIn,sizeof(uint32_t)*starCount,cudaMemcpyDeviceToHost));
+
+    uint64_t* CPUMortonIn = (uint64_t*) calloc(starCount,sizeof(uint64_t));
+    uint64_t* CPUMortonOut = (uint64_t*) calloc(starCount,sizeof(uint64_t));
+
+    CUDA_CHECK(cudaMemcpy(CPUMortonIn,cudaMortonCodesIn,sizeof(uint64_t)*starCount,cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(CPUMortonOut,cudaMortonCodesOut,sizeof(uint64_t)*starCount,cudaMemcpyDeviceToHost));
+    for (int i = 0; i < starCount; i++) {
+        printf("originalIndexOut[%d]: %d, originalIndexIn[%d]: %d\n", i, CPUOriginalIndexOut[i], i, CPUOriginalIndexIn[i]);
+        printf("MortonOut[%d]: %ld, MortonIn[%d]: %ld\n", i, CPUMortonOut[i], i, CPUMortonIn[i]);
+    }
+    */
 
     reorderParticles<<<treeBlocks,THREADPERBLOCK>>>(*cudaPosMasVals,*cudaVelVals,tree->sortedPosMassVals,tree->sortedVelVals,cudaOriginalIndexOut,starCount);
 
@@ -208,6 +244,7 @@ void buildTree(treeState* tree, float4** cudaPosMasVals, float3** cudaVelVals) {
     // root node array values
     tree->levelOffsets[0] = 0;
     tree->levelCount[0] = 1;
+    //tree->deepestLevel = 0;
 
     for (int level = 1; level < 21; level++) {
         // Mark the index boundaries of the star array at which the nodes start
@@ -269,15 +306,14 @@ void buildTree(treeState* tree, float4** cudaPosMasVals, float3** cudaVelVals) {
     // Stage 5, set tree mass
     // ==========
 
-    // Debug info
-
-    for (int i = 0; i <= tree->deepestLevel; i++) {
-        printf("Level: %d, particleCount: %d, offset: %d\n",i,tree->levelCount[i],tree->levelOffsets[i]);
-    }
-
     for (int j = tree->deepestLevel; j >= 0; j--) {
         updateTreeMass<<<treeBlocks,THREADPERBLOCK>>>(CUDANodes,*cudaPosMasVals,j,tree->levelCount[j],tree->levelOffsets[j]);
     }
+
+    // Debug info
+    //for (int i = 0; i <= tree->deepestLevel; i++) {
+    //    printf("Level: %d, particleCount: %d, offset: %d\n",i,tree->particleCount[i],tree->levelOffsets[i]);
+    //}
 }
 
 // Helper function
@@ -296,63 +332,6 @@ sVec3* randomGen(int lower, int upper, size_t N) {
         (address + i)->z = zVal;
     }
     return address;
-}
-
-
-/*
-Each thread holds ownership of the stars at index: (threadTaskMapping, threadTaskMapping + blockDim.x, threadTaskMapping + 2 * blockDim.x, threadTaskMapping + 3 * blockDim.x)
-This means that block 0 now holds ownership of the same stars that blocks: 0,1,2,3 would have held (using a thread coarsening factor of 4)
-And likewise block 1 holds ownership of what used to be blocks: 4,5,6,7 etc
-*/
-__global__ void forceCalc(const float4* __restrict__ positionMassArray, float3 (*accelArray), int starCount, int paddedStarCount, float antiSingularitySquared) {
-    // In order to give each thread several tasks, I assign each thread ownership of 4 tasks using the following formula
-    int threadTaskMapping = blockIdx.x * blockDim.x * THREADCOARSENING + threadIdx.x;
-
-    if (threadTaskMapping + ((THREADCOARSENING - 1) * blockDim.x) >= paddedStarCount) {
-        //int threadNum = blockIdx.x * blockDim.x + threadIdx.x;
-        //printf("Thread number: %d, was caught.\n", threadNum);
-        return;
-    }
-
-    // Acceleration and position data
-    float4 starData[THREADCOARSENING];
-    float3 accels[THREADCOARSENING] = {};
-
-    #pragma unroll
-    for (int i = 0; i < THREADCOARSENING; i++) {
-        starData[i] = positionMassArray[threadTaskMapping + (blockDim.x * i)];
-    }
-
-    // Brute force calculate the force exerted on the particle 'threadNum'
-    // Position differences
-    for (int i = 0; i < starCount; i++){
-        /* Turns out this isnt required, as if the particle is compared to itself, its separatino is zero anyways
-        if (i == threadNum) {continue;}
-        */
-        float4 ithStarData = positionMassArray[i];
-        #pragma unroll
-        for (int j = 0; j < THREADCOARSENING; j++) {
-            float dx = starData[j].x - ithStarData.x;
-            float dy = starData[j].y - ithStarData.y;
-            float dz = starData[j].z - ithStarData.z;
-            float r2 = (dx*dx + dy*dy + dz*dz + antiSingularitySquared);
-
-            float invR = rsqrtf(r2);
-
-            float aMag = (G*ithStarData.w) * invR * invR;
-
-            accels[j].x -= aMag * (dx*invR);
-            accels[j].y -= aMag * (dy*invR);
-            accels[j].z -= aMag * (dz*invR);
-        }
-
-        // Acceleration components
-
-    }
-    #pragma unroll
-    for (int k = 0; k < THREADCOARSENING; k++) {
-        accelArray[threadTaskMapping + (k * blockDim.x)] = accels[k];
-    }
 }
 
 
@@ -413,6 +392,62 @@ int roundNumberToMultiple(int number, int multiple) {
 Since the force calculator allocates several particles to each thread, this can cause the kernel to read past the position and velocity arrays ends.
 Therefore to ensure garbage values are not read, all of them are initialised to zero, so that they have no effect on the calcualted force.
 */
+
+void blockNumCalculator(int* accelerationBlocks, int* treeBuilderBlocks, int* integrateBlocks, int* paddedStarCount, int* integrationThreadsPerBlock, int* treeBuilderThreadsPerBlock , int starCount) {
+    
+    
+    int accelerationThreadsPerBlock = WARPTHREADS;
+    *integrationThreadsPerBlock = 256;
+    *treeBuilderThreadsPerBlock = 256;
+
+    // ===================================================================================
+    // CPU and GPU core count
+    // ===================================================================================
+
+    int numCPU = get_nprocs();
+
+    printf("CPU CORES: %d\n",numCPU);
+
+    *paddedStarCount = roundNumberToMultiple(starCount,accelerationThreadsPerBlock);
+
+    // ===================================================================================
+    // Force block calculator
+    // ===================================================================================
+
+    // Check if the threads can be evenly distributed between blocks, with no remainder.
+    if (starCount % accelerationThreadsPerBlock == 0) {
+        *accelerationBlocks = ((*paddedStarCount)/accelerationThreadsPerBlock);
+    }
+    // If it cannot be evenly distributed between blocks, we assign an extra block
+    else {
+        *accelerationBlocks = (*paddedStarCount/accelerationThreadsPerBlock) + 1;
+    }
+
+    // ===================================================================================
+    // Integration block calculator
+    // ===================================================================================
+
+    if (starCount % *integrationThreadsPerBlock == 0) {
+        *integrateBlocks = ((*paddedStarCount) / *integrationThreadsPerBlock);
+    }
+    else {
+        *integrateBlocks = ((*paddedStarCount) / *integrationThreadsPerBlock) + 1;
+    }
+
+    // ===================================================================================
+    // Integration block calculator
+    // ===================================================================================
+
+    if (starCount % *treeBuilderThreadsPerBlock) {
+        *treeBuilderBlocks = ((*paddedStarCount) / *treeBuilderThreadsPerBlock);
+    }
+    else {
+        *treeBuilderBlocks = ((*paddedStarCount) / *treeBuilderThreadsPerBlock + 1);
+    }
+
+    
+}
+
 void threadSizeCalc(int* forceBlocks, int* integrateBlocks, int* paddedStarCount, int starCount) {
     int threadsPerForceBlock = THREADCOARSENING * THREADPERBLOCK;
     int threadsPerIntegrationBlock = THREADPERBLOCK;
@@ -443,10 +478,11 @@ void threadSizeCalc(int* forceBlocks, int* integrateBlocks, int* paddedStarCount
 }
 
 int main(void) {
+    // Main Parameters
     srand(time(0));
     //int cpuNThreads = 256;
-    int tSteps = 3;
-    int starCount = 50;
+    int tSteps = 100;
+    int starCount = 2000;
     int framesPerWrite = 5;
 
     // Size of star box
@@ -460,15 +496,13 @@ int main(void) {
     On the other hand the integration is mainly limited by the memory access time, so that is unecessary. So therefore we use different block counts for both in order to support
     the thread coarsening I implemented.
     */
-    int forceBlocks, integrateBlocks, paddedStarCount;
+    int accelerationBlocks, treeBuilderBlocks, integrateBlocks, integrationThreadsPerBlock, treeBuilderThreadsPerBlock, paddedStarCount;
 
-    threadSizeCalc(&forceBlocks,&integrateBlocks,&paddedStarCount,starCount);
+    blockNumCalculator(&accelerationBlocks,&treeBuilderBlocks,&integrateBlocks,&paddedStarCount,&integrationThreadsPerBlock,&treeBuilderThreadsPerBlock,starCount);
 
-    printf("Blocks allocated for force calculation: %d/80\n",forceBlocks);
+    printf("Blocks allocated for acceleration calculation: %d/80\n",accelerationBlocks);
     printf("Blocks allocated for integration calculation: %d/80\n",integrateBlocks);
-    printf("Total number of threads for force calculation: %d\n", starCount/THREADCOARSENING);
-    printf("Threads per block: %d\n", THREADPERBLOCK);
-    printf("Star count: %d, Padded star count: %d.\n",starCount, paddedStarCount);
+    printf("Total number of threads for force calculation: %d\n", paddedStarCount);
     
     unsigned long int NSquared = ((unsigned long int)starCount*(unsigned long int)starCount);
     printf("\nInteractions total: %lu\n\n", (long int)tSteps * NSquared);
@@ -551,6 +585,16 @@ int main(void) {
     size_t velSize = sizeof(cpuVelocityVals[0]) * paddedStarCount;
     size_t accelSize = sizeof(cpuAccelerationVals[0]) * paddedStarCount;
 
+    // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
+    // Define constants on GPU
+    // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
+
+    float* cudaG = 0;
+    float* cudaAntiSingularitySquared = 0;
+    float* cudaTheta = 0;
+    
+
+
     printf("Memory allocated to following arrays (in bytes):\n\n\tPosition: %zu\n\tVelocity: %zu\n\tAcceleration: %zu\n",posSize,velSize,accelSize);
     fflush(stdout);
 
@@ -561,11 +605,14 @@ int main(void) {
 
     The acceleration array does not need an equivalent duplicate, as it is overwritten each frame.
     */
-    cudaMalloc(&cudaPositionMassVals,posSize);
+    CUDA_CHECK(cudaMalloc(&cudaPositionMassVals,posSize));
+    CUDA_CHECK(cudaMalloc(&cudaVelocityVals,velSize));
+    CUDA_CHECK(cudaMalloc(&cudaAccelerationVals,accelSize));
 
-    cudaMalloc(&cudaVelocityVals,velSize);
-
-    cudaMalloc(&cudaAccelerationVals,accelSize);
+    // Allocate memory for the parameters
+    CUDA_CHECK(cudaMalloc(&cudaG,sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&cudaAntiSingularitySquared,sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&cudaTheta,sizeof(float)));
 
     // Error checking
     if (cudaPositionMassVals == NULL || cudaVelocityVals == NULL || cudaAccelerationVals == NULL) {
@@ -578,9 +625,20 @@ int main(void) {
     printf("Memory transferred to GPU\n");
 
     // Transfer arrays
-    cudaMemcpy(cudaPositionMassVals,cpuPositionMassVals,posSize,cudaMemcpyHostToDevice);
-    cudaMemcpy(cudaVelocityVals,cpuVelocityVals,velSize,cudaMemcpyHostToDevice);
-    cudaMemcpy(cudaAccelerationVals,cpuAccelerationVals,accelSize,cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMemcpy(cudaPositionMassVals,cpuPositionMassVals,posSize,cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(cudaVelocityVals,cpuVelocityVals,velSize,cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(cudaAccelerationVals,cpuAccelerationVals,accelSize,cudaMemcpyHostToDevice));
+
+    // Transfer constants
+    float antiSingVal = antiSingularity * antiSingularity;
+    // This is just a precaution to make sure the values of these important functions are not changed
+    float GVal = G;
+    float thetaVal = theta;
+    CUDA_CHECK(cudaMemcpy(cudaG,&GVal,1,cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(cudaAntiSingularitySquared,&antiSingVal,1,cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(cudaTheta,&thetaVal,1,cudaMemcpyHostToDevice));
+
+
 
     // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
     // Core logic
@@ -636,17 +694,17 @@ int main(void) {
     // CPU MIN MAX
 
     cudaEvent_t startTime, finishTime, mathStartTime, mathEndTime;
-    cudaEventCreate(&startTime);
-    cudaEventCreate(&finishTime);
+    CUDA_CHECK(cudaEventCreate(&startTime));
+    CUDA_CHECK(cudaEventCreate(&finishTime));
 
     // Functions to profile the maths speed
-    cudaEventCreate(&mathStartTime);
-    cudaEventCreate(&mathEndTime);
+    CUDA_CHECK(cudaEventCreate(&mathStartTime));
+    CUDA_CHECK(cudaEventCreate(&mathEndTime));
     float timePerStep = 2.0;
-    cudaEventRecord(mathStartTime,0);
+    CUDA_CHECK(cudaEventRecord(mathStartTime,0));
 
     // Record the start time
-    cudaEventRecord(startTime,0);
+    CUDA_CHECK(cudaEventRecord(startTime,0));
 
     progressPrinter(tSteps,0,40,0);
 
@@ -663,23 +721,40 @@ int main(void) {
     */
 
     treeState* state = (treeState*) calloc(1,sizeof(treeState));
+    
 
     initialiseTree(state,starCount,paddedStarCount,integrateBlocks);
 
+
+    // Block calculator:
+
+
+
     for (int i = 0; i < tSteps; i++) {
 
-        // PROCESS 1)
+        // PROCESS 1
         cudaEventRecord(mathStartTime,0);
         
-        buildTree(state,&cudaPositionMassVals,&cudaVelocityVals);
+        // PROCESS 2
+        // Host side function
+        buildTree(state,&cudaPositionMassVals,&cudaVelocityVals); // CLEARED IN DEBUG INVESTIGATION
 
-    
-        
+        // PROCESS 3
+        // GPU side function
+        // I can pass the entirety of the state tree as an argument, with no need to use a pointer. This is because all the arguments are sent to the GPU anyways.
+        calculateAcceleration<<<accelerationBlocks,WARPTHREADS>>>(cudaPositionMassVals,*state,cudaAccelerationVals,cudaAntiSingularitySquared,cudaG,cudaTheta,starCount);
+
+        // PROCESS 4
+        // GPU side function
+        positionUpdater<<<integrateBlocks,integrationThreadsPerBlock>>>(cudaPositionMassVals,cudaVelocityVals,cudaAccelerationVals,starCount,dt);
+
+
         //cudaDeviceSynchronize();
-        integrateStep<<<integrateBlocks,THREADPERBLOCK>>>(cudaPositionMassVals,cudaVelocityVals,cudaAccelerationVals,starCount,dt);
+
         cudaEventRecord(mathEndTime,0);
         cudaDeviceSynchronize();
-        if (i % framesPerWrite == 0) {        
+        if (i % framesPerWrite == 0) {       
+            printf("\n\n WriteFrame code hit\n\n"); 
             cudaError_t mathTimeErr = cudaEventElapsedTime(&timePerStep,mathStartTime,mathEndTime);
             if (mathTimeErr != 0) {printf("CUDA ERROR: Problem with frame time calculator, %s\n",cudaGetErrorString(mathTimeErr));}
             cudaMemcpy(cpuPositionMassVals,cudaPositionMassVals,unpaddedPosSize,cudaMemcpyDeviceToHost);
@@ -692,12 +767,6 @@ int main(void) {
     float timeElapsedMilliseconds = -1.1;
     cudaError_t totalElapsedTimeErr =  cudaEventElapsedTime(&timeElapsedMilliseconds,startTime,finishTime);
     if (totalElapsedTimeErr != 0) {printf("CUDA ERROR: Problem with total elapsed time calculator, %s\n", cudaGetErrorString(totalElapsedTimeErr));}
-
-    buildTree(state,&cudaPositionMassVals,&cudaVelocityVals);
-
-    // World box location
-
-
 
     cudaDeviceSynchronize();
 

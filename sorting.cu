@@ -31,9 +31,9 @@ radixSorter* sorterCreate(int maxCount) {
 
     // Gives CUB the type of the values being sorted, and the number of items being sorted, so that it can initialise the sorting algorithm
     uint64_t* nullKeys = nullptr;
-    uint64_t* nullVals = nullptr;
+    uint32_t* nullVals = nullptr;
 
-    // Initialise the radix sorter, and check it for errors (I should probably do this more)
+    // Initialise the radix sorter, and check it for errors 
 
     void* tempStorage = nullptr;
     size_t tempStorageBytes = 0;
@@ -42,13 +42,17 @@ radixSorter* sorterCreate(int maxCount) {
             nullKeys,nullKeys,
             nullVals,nullVals,maxCount);
 
+    
+
     if (radixError != 0) {
         printf("ERROR: Sorter CUB query failed: %s\n", cudaGetErrorString(radixError));
         exit(-1);
     }
+    
+    sorter->tempStorageBytes = tempStorageBytes;
 
     // Malloc data, and check for errors
-    cudaError_t mallocErr = cudaMalloc(&sorter->tempStorage,sorter->tempStorageBytes);
+    cudaError_t mallocErr = cudaMalloc(&(sorter->tempStorage),sorter->tempStorageBytes);
     if (mallocErr != 0) {
         printf("ERROR: Failed to malloc data for CUB radix sort. %s\n", cudaGetErrorString(mallocErr));
         exit(-1);
@@ -70,12 +74,8 @@ void radixSortPairs(radixSorter* sorter, const uint64_t* keysIn, uint64_t* keysO
         printf("ERROR: Length of array to sort conflicts with capacity of radix sorter.\n");
         exit(-1);
     }
-    cudaError_t sorterError = cub::DeviceRadixSort::SortPairs(sorter->tempStorage,sorter->tempStorageBytes,keysIn,keysOut,valsIn,valsOut,numCount);
+    CUDA_CHECK(cub::DeviceRadixSort::SortPairs(sorter->tempStorage,sorter->tempStorageBytes,keysIn,keysOut,valsIn,valsOut,numCount));
 
-    if(sorterError != 0) {
-        printf("\nERROR: Error occured with performing radix sort: %s\n", cudaGetErrorString(sorterError));
-        exit(-1);
-    }
 }
 
 void sorterDestroyer(radixSorter* sorter) {

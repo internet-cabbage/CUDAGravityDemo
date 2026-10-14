@@ -320,7 +320,7 @@ __device__ uint64_t mortonIndex(uint32_t x, uint32_t y, uint32_t z) {
     return (expandBits(x)<<2) | (expandBits(y)<<1) | (expandBits(z));
 }
 
-__global__ void mortonEncode(const float4* posMassVals, uint64_t* mortonCodes, uint32_t* originalIndex, int NStars, worldBox rootBox) {
+__global__ void mortonEncode(const float4* __restrict__ posMassVals, uint64_t* mortonCodes, uint32_t* originalIndex, int NStars, worldBox rootBox) {
     int threadId = blockIdx.x * blockDim.x + threadIdx.x;
 
     // Checks if the thread is assigned to a star
@@ -414,6 +414,11 @@ __global__ void localMinMaxFinder(const float4* __restrict__ posMassVals, unsign
 
     // Make sure threadMin and threadMax have been filled before reducing them
     __syncthreads();
+    if (lowerVals.x != INFINITY) {
+        //printf("Thread Min: (%f, %f, %f)\n", lowerVals.x, lowerVals.y, lowerVals.z);
+    }
+
+    
 
     // Then condense the threadMin and threadMax values down into global minima and maxima values
     blockReduceMinMax(threadMin,threadMax,interiorID);
@@ -437,7 +442,7 @@ __global__ void globalMinMaxReducer(const float3* __restrict__ minCorner, const 
     float3 lowerVals = make_float3(INFINITY,INFINITY,INFINITY);
     float3 upperVals = make_float3(-INFINITY,-INFINITY,-INFINITY);
 
-    // Check if the thread even corresponds to an id in the 
+    // Check if the thread even corresponds to an id in the array of stars
     if (interiorID < count) {
         lowerVals = minCorner[interiorID];
         upperVals = maxCorner[interiorID];
@@ -454,7 +459,10 @@ __global__ void globalMinMaxReducer(const float3* __restrict__ minCorner, const 
     if (interiorID == 0) {
         *outMin = threadMin[0];
         *outMax = threadMax[0];
+        printf("\nGLOBAL MINIMA: (%f,%f,%f)\n\n",outMin->x,outMin->y,outMin->z);
     }
+
+    
 }
 
 
@@ -648,7 +656,7 @@ __global__ void calculateAcceleration(const float4* __restrict__ positionMassArr
     }
 }
 
-__global__ void positionUpdater(float4* positionMassArray, float3* velocityVals, float3* accelerationVals, int starCount, int timeStep) {
+__global__ void positionUpdater(float4* positionMassArray, float3* velocityVals, float3* accelerationVals, int starCount, float timeStep) {
     int threadNum = threadIdx.x + (blockDim.x * blockIdx.x);
 
     // Invalid star checker
@@ -665,12 +673,12 @@ __global__ void positionUpdater(float4* positionMassArray, float3* velocityVals,
     */
 
     // Update velocity values
-    velocityVals[threadNum].x = myVel.x + (accelerationVals[threadNum].x * timeStep);
-    velocityVals[threadNum].y = myVel.y + (accelerationVals[threadNum].y * timeStep);
-    velocityVals[threadNum].z = myVel.z + (accelerationVals[threadNum].z * timeStep);
+    (velocityVals[threadNum]).x = myVel.x + ((accelerationVals[threadNum]).x * timeStep);
+    (velocityVals[threadNum]).y = myVel.y + ((accelerationVals[threadNum]).y * timeStep);
+    (velocityVals[threadNum]).z = myVel.z + ((accelerationVals[threadNum]).z * timeStep);
 
     // Update position values
-    positionMassArray[threadNum].x = myPosMass.x + (positionMassArray[threadNum].x * timeStep);
-    positionMassArray[threadNum].y = myPosMass.y + (positionMassArray[threadNum].y * timeStep);
-    positionMassArray[threadNum].z = myPosMass.z + (positionMassArray[threadNum].z * timeStep);
+    (positionMassArray[threadNum]).x = myPosMass.x + ((velocityVals[threadNum]).x * timeStep);
+    (positionMassArray[threadNum]).y = myPosMass.y + ((velocityVals[threadNum]).y * timeStep);
+    (positionMassArray[threadNum]).z = myPosMass.z + ((velocityVals[threadNum]).z * timeStep);
 } 

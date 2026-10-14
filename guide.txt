@@ -33,3 +33,7 @@ To debug I follow the process:
         b) 'list', shows the lines of code around the crash
         c) 'info locals', prints the values of all the variables at the moment of the crash
         d) 'print var', prints the value of the variable with name 'var'
+
+I can also profile the program using 'nsys profile gravitySim', which produces profiling data that I can then analyse:
+
+nsys stats --report cuda_gpu_kern_sum 'REPORT_NAME'
