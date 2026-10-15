@@ -28,9 +28,14 @@ All the custom data structures in the program are stored in the ```types.h``` he
   * ```minX```, ```minY```, and ```minZ```: These are the coordinates of the cube's corner with the smallest value.
   * ```extent```: This is the side length of the cube.
   * ```scale```: This is a factor that can be used to convert between the float coordinates of the stars (normalised such that (0.0,0.0,0.0) is the bottom left corner), and the integer grid of coordinates.
-  * TODO
 * ```treeBuilder```:
-  * TODO
+  * ```tempStorage```: A pointer which contains the location of the chunk of memory (on the GPU), which is used to perform the prefix sum of the nodeFlags. This is used to identify which node a given star lies inside.
+  * ```tempStorageBytes```: The amount of memory allocated to the sum.
+  * ```capacity```: The maximum number of nodeFlags which can be summed.
+  * ```flagsPing```: 
+  * ```flagsPong```:
+  * ```offsetsPing```:
+  * ```offsetsPong```:
 * ```treeState```:
   * TODO
 * ```galaxyDiskParameters```:
