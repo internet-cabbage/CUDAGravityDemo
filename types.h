@@ -54,7 +54,6 @@ typedef struct {
     int parentIndex;
     int firstParticleIndex; // The index in the sorted morton code array, at which point the particle(s) within this node start
     int particleCount; // How many particles are within the node
-    
     int child[8]; // The index positions of the child nodes
     // If the child[i] value is equal to -1, then the child is empty
 
@@ -90,7 +89,15 @@ typedef struct {
     float3* sortedVelVals;
 } treeState;
 
+typedef struct {
+    float scaleLength;
+    float scaleThickness;
 
+    float totalDiskMass;
+    sVec3 rotationAngles; // [Yaw, Pitch, Roll]
+    sVec3 galacticCentreLocation; 
+    sVec3 galacticNetVelocity;
+} galaxyDiskParameters;
 
 
 #endif

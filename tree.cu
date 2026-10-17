@@ -36,7 +36,15 @@ Since particles are sorted according to morton code, all the child-particles of 
 */
 
 /*
-I 
+This identifies the nodes at a given level of the octtree, by comparing a slice of the star's morton code with the star before it.
+
+The morton code effectively serves as a series of instructions detailing how to reach that node, with each 3 bits being one 'instruction'. 
+Every sequence of 3 bits represents a different level in the tree, where 3k bits refers to level k of the tree.
+
+I made a mistake earlier in the implementation of this algorithm. As I was trying to identify nodes by checking whether a star has a different morton code at that level,
+compared to the star before it. If they were different then the star assigned to that thread was the one starting a new node, otherwise it was just a part of the previous node.
+This has a problem where if a star is alone in it's node (e.g. a leaf node), it will continually produce nodes until it reaches the bottom of the tree. This produces a chain
+of nodes which caused the calculateAcceleration() function to
 */
 
 __global__ void identifyNodesAtLevel(uint64_t* mortonCodes, int nodeLevel, int starCount, uint32_t* nodeFlags) {
@@ -459,7 +467,7 @@ __global__ void globalMinMaxReducer(const float3* __restrict__ minCorner, const 
     if (interiorID == 0) {
         *outMin = threadMin[0];
         *outMax = threadMax[0];
-        printf("\nGLOBAL MINIMA: (%f,%f,%f)\n\n",outMin->x,outMin->y,outMin->z);
+        //printf("\nGLOBAL MINIMA: (%f,%f,%f)\n\n",outMin->x,outMin->y,outMin->z);
     }
 
     
@@ -605,7 +613,7 @@ __global__ void calculateAcceleration(const float4* __restrict__ positionMassArr
         */
 
         // Check if the node is a leaf node
-        bool isLeaf = isLeafCalc(&n);
+        bool isLeaf = (n.particleCount <= 1) || isLeafCalc(&n);
 
         if (((nodeSize * nodeSize) < (theta * theta) * distanceSqr) || (validThread == false) || (isLeaf == true)) {
             wantToDescend = false;

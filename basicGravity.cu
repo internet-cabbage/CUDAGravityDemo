@@ -59,7 +59,6 @@ void initialiseTree(treeState* state, int starCount, int paddedStarCount, int in
     uint32_t* tempArray = (uint32_t*) calloc(starCount, sizeof(uint32_t));
     for (int i = 0; i < starCount; i++) {
         tempArray[i] = i;
-        printf("tempArray[%d]: %d",i,tempArray[i]);
     }
     cudaMemcpy(cudaIndexIn,tempArray,sizeof(uint32_t)*starCount,cudaMemcpyHostToDevice);
     free(tempArray);
@@ -190,7 +189,7 @@ void buildTree(treeState* tree, float4** cudaPosMasVals, float3** cudaVelVals) {
     radixSorter* sorterObject = tree->sorter;
 
     // Sorter input data print
-    printf("Sorter capacity: %d, storagePointer: %p, storageBytes: %zu\n", sorterObject->capacity, sorterObject->tempStorage, sorterObject->tempStorageBytes); 
+    //printf("Sorter capacity: %d, storagePointer: %p, storageBytes: %zu\n", sorterObject->capacity, sorterObject->tempStorage, sorterObject->tempStorageBytes); 
     
 
     radixSortPairs(sorterObject,cudaMortonCodesIn,cudaMortonCodesOut,cudaOriginalIndexIn,cudaOriginalIndexOut,starCount);
@@ -272,6 +271,10 @@ void buildTree(treeState* tree, float4** cudaPosMasVals, float3** cudaVelVals) {
         // Count how many particles are in each node, and write it to the nodes
         updateTreeParticles<<<treeBlocks,THREADPERBLOCK>>>(CUDANodes,arrayLevelOffset,nodeCount,starCount);
 
+
+        // Check for a tree overflow
+        if (nodeCount + arrayLevelOffset > maxNodes) {printf("ERROR: Node array overflow at level: %d", level); exit(-1);}
+        
         // Check if the tree is complete, and if so we can stop building the tree (as you know, we have kind of done it already)
         if (nodeCount == starCount) {
             tree->deepestLevel++;
@@ -279,8 +282,6 @@ void buildTree(treeState* tree, float4** cudaPosMasVals, float3** cudaVelVals) {
             tree->levelOffsets[level] = arrayLevelOffset;
             break;}
 
-        // Check for a tree overflow
-        if (nodeCount + arrayLevelOffset > maxNodes) {printf("ERROR: Node array overflow at level: %d", level); exit(-1);}
 
         
         // Updates the array offsets
@@ -481,9 +482,9 @@ int main(void) {
     // Main Parameters
     srand(time(0));
     //int cpuNThreads = 256;
-    int tSteps = 100;
-    int starCount = 2000;
-    int framesPerWrite = 5;
+    int tSteps = 1000;
+    int starCount = 20000;
+    int framesPerWrite = 1;
 
     // Size of star box
 
@@ -754,7 +755,7 @@ int main(void) {
         cudaEventRecord(mathEndTime,0);
         cudaDeviceSynchronize();
         if (i % framesPerWrite == 0) {       
-            printf("\n\n WriteFrame code hit\n\n"); 
+            //printf("\n\n WriteFrame code hit\n\n"); 
             cudaError_t mathTimeErr = cudaEventElapsedTime(&timePerStep,mathStartTime,mathEndTime);
             if (mathTimeErr != 0) {printf("CUDA ERROR: Problem with frame time calculator, %s\n",cudaGetErrorString(mathTimeErr));}
             cudaMemcpy(cpuPositionMassVals,cudaPositionMassVals,unpaddedPosSize,cudaMemcpyDeviceToHost);
