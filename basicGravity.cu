@@ -439,11 +439,11 @@ void blockNumCalculator(int* accelerationBlocks, int* treeBuilderBlocks, int* in
     // Integration block calculator
     // ===================================================================================
 
-    if (starCount % *treeBuilderThreadsPerBlock) {
+    if (starCount % *treeBuilderThreadsPerBlock == 0) {
         *treeBuilderBlocks = ((*paddedStarCount) / *treeBuilderThreadsPerBlock);
     }
     else {
-        *treeBuilderBlocks = ((*paddedStarCount) / *treeBuilderThreadsPerBlock + 1);
+        *treeBuilderBlocks = ((*paddedStarCount) / *treeBuilderThreadsPerBlock) + 1;
     }
 
     
@@ -630,17 +630,6 @@ int main(void) {
     CUDA_CHECK(cudaMemcpy(cudaVelocityVals,cpuVelocityVals,velSize,cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(cudaAccelerationVals,cpuAccelerationVals,accelSize,cudaMemcpyHostToDevice));
 
-    // Transfer constants
-    float antiSingVal = antiSingularity * antiSingularity;
-    // This is just a precaution to make sure the values of these important functions are not changed
-    float GVal = G;
-    float thetaVal = theta;
-    CUDA_CHECK(cudaMemcpy(cudaG,&GVal,1,cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(cudaAntiSingularitySquared,&antiSingVal,1,cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(cudaTheta,&thetaVal,1,cudaMemcpyHostToDevice));
-
-
-
     // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
     // Core logic
     // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
@@ -743,7 +732,7 @@ int main(void) {
         // PROCESS 3
         // GPU side function
         // I can pass the entirety of the state tree as an argument, with no need to use a pointer. This is because all the arguments are sent to the GPU anyways.
-        calculateAcceleration<<<accelerationBlocks,WARPTHREADS>>>(cudaPositionMassVals,*state,cudaAccelerationVals,cudaAntiSingularitySquared,cudaG,cudaTheta,starCount);
+        calculateAcceleration<<<accelerationBlocks,WARPTHREADS>>>(cudaPositionMassVals,*state,cudaAccelerationVals,antiSingularity*antiSingularity,G,theta,starCount);
 
         // PROCESS 4
         // GPU side function
@@ -756,11 +745,10 @@ int main(void) {
         cudaDeviceSynchronize();
         if (i % framesPerWrite == 0) {       
             //printf("\n\n WriteFrame code hit\n\n"); 
-            cudaError_t mathTimeErr = cudaEventElapsedTime(&timePerStep,mathStartTime,mathEndTime);
-            if (mathTimeErr != 0) {printf("CUDA ERROR: Problem with frame time calculator, %s\n",cudaGetErrorString(mathTimeErr));}
+            CUDA_CHECK(cudaEventElapsedTime(&timePerStep,mathStartTime,mathEndTime));
             cudaMemcpy(cpuPositionMassVals,cudaPositionMassVals,unpaddedPosSize,cudaMemcpyDeviceToHost);
             writeFrame(fptr,(sVec4*)cpuPositionMassVals,starCount,frameBuffer);
-            progressPrinter(tSteps,i,40,timePerStep/((float)framesPerWrite));
+            progressPrinter(tSteps,i,40,timePerStep);
         }
     }
     cudaEventRecord(finishTime,0);

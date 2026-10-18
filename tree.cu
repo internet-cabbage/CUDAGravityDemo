@@ -53,15 +53,20 @@ __global__ void identifyNodesAtLevel(uint64_t* mortonCodes, int nodeLevel, int s
     if (threadNum >= starCount) {return;}
     if (threadNum == 0) {nodeFlags[0]=1;return;} // The first particle has to start a node
 
-    uint64_t currentOctrant = extractBitsFromLevel(mortonCodes[threadNum],nodeLevel);
-    uint64_t previousOctrant = extractBitsFromLevel(mortonCodes[threadNum-1],nodeLevel);
+    // Checks if the current node 
+    uint64_t currentNode = extractBitsFromLevel(mortonCodes[threadNum],nodeLevel);
+    bool sameNodeAsLeft = (threadNum > 0) & (currentNode == extractBitsFromLevel(mortonCodes[threadNum-1],nodeLevel));
+    bool sameNodeAsRight = (threadNum < starCount - 1) & (currentNode == extractBitsFromLevel(mortonCodes[threadNum+1],nodeLevel));
 
-    if (currentOctrant != previousOctrant) {
-        nodeFlags[threadNum] = 1;
-    }
-    else {
+    // If the node being considered does not share a node with either the node on its left or right, it is already a leaf node
+    // so we do not need to start another node.
+    if (!sameNodeAsLeft && !sameNodeAsRight) {
         nodeFlags[threadNum] = 0;
     }
+    else if (!sameNodeAsLeft) {
+        nodeFlags[threadNum] = 1;
+    }
+
 }
 
 // Code to actually produce the nodes
@@ -168,6 +173,28 @@ __global__ void updateTreeMass(node* nodes,const float4* positionMassVals, int l
 __global__ void updateTreeParticles(node* nodes, int levelStartIndex, int levelNodeCount, int starCount) {
     int threadNum = threadIdx.x + (blockDim.x * blockIdx.x);
     if (threadNum >= levelNodeCount) {return;}
+
+    int nodeIndex = levelStartIndex + threadNum;
+    int parentIndex = nodes[nodeIndex].parentIndex;
+
+    // Checks if the node to the right of the current node (i.e. the node with an index one higher), shares the same parent node
+    bool isNextNodeASibling = (threadNum + 1 < levelNodeCount) && (nodes[nodeIndex+1].parentIndex == parentIndex);
+
+    // Stores the index position of the node in the 
+    int starArrayEnd = -1;
+
+    if (isNextNodeASibling) {
+        starArrayEnd = nodes[nodeIndex+1].firstParticleIndex;
+    }
+    else {
+        node parentNode = nodes[parentIndex];
+        starArrayEnd = parentNode.firstParticleIndex + parentNode.particleCount;
+    }
+    int starArrayBeginning = nodes[nodeIndex].firstParticleIndex;
+    nodes[nodeIndex].particleCount = starArrayEnd - starArrayBeginning;
+
+
+    // ====================
 
     int firstParticle = nodes[levelStartIndex + threadNum].firstParticleIndex;
     int nextParticle = 0;
@@ -489,6 +516,7 @@ __device__ float calculateNodeSize(treeState* tree,int level) {
 
     boxExtent = upperBoxBounds->x - lowerBoxBounds->x;
 
+    /*
     // Check for irregular box size;
     float xSize = upperBoxBounds->x - lowerBoxBounds->x;
     float ySize = upperBoxBounds->y - lowerBoxBounds->y;
@@ -544,12 +572,8 @@ otherwise I will traverse the tree until it is met by all stars. This is to mini
 
 // Calculate the force acting on a given particle
 // This must be called to run across 32 threads
-__global__ void calculateAcceleration(const float4* __restrict__ positionMassArray, treeState tree, float3* accelVals, float* antiSingularitySquaredPointer, float* GValPointer, float* thetaPointer, int starCount) {
+__global__ void calculateAcceleration(const float4* __restrict__ positionMassArray, treeState tree, float3* accelVals, float antiSingularitySquared, float GVal, float theta, int starCount) {
     int threadNum = threadIdx.x + (blockDim.x * blockIdx.x);
-
-    float theta = *thetaPointer;
-    float antiSingularitySquared = *antiSingularitySquaredPointer;
-    float GVal = *GValPointer;
 
     // Pointer variables used to make easier reference to other values
     node* nodes = tree.nodes;
