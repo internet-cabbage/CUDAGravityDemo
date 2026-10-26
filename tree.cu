@@ -51,20 +51,28 @@ __global__ void identifyNodesAtLevel(uint64_t* mortonCodes, int nodeLevel, int s
     int threadNum = threadIdx.x + (blockDim.x * blockIdx.x);
 
     if (threadNum >= starCount) {return;}
-    if (threadNum == 0) {nodeFlags[0]=1;return;} // The first particle has to start a node
 
     // Checks if the current node 
     uint64_t currentNode = extractBitsFromLevel(mortonCodes[threadNum],nodeLevel);
-    bool sameNodeAsLeft = (threadNum > 0) & (currentNode == extractBitsFromLevel(mortonCodes[threadNum-1],nodeLevel));
-    bool sameNodeAsRight = (threadNum < starCount - 1) & (currentNode == extractBitsFromLevel(mortonCodes[threadNum+1],nodeLevel));
+    uint64_t currentNodeParent = extractBitsFromLevel(mortonCodes[threadNum],nodeLevel-1);
+
+    /* If the node is a leaf node, it will have different parent nodes to the nodes on its right and left
+        otherwise if it is not a leaf node, then it starts a new node if it does not share the same morton code up to it's current level.
+    */  
+    bool sameParentNodeAsLeft = (threadNum > 0) && (currentNodeParent == extractBitsFromLevel(mortonCodes[threadNum-1],nodeLevel-1));
+    bool sameParentNodeAsRight = (threadNum < starCount - 1) && (currentNodeParent == extractBitsFromLevel(mortonCodes[threadNum+1],nodeLevel-1));
+    bool sameNodeAsLeft = (threadNum > 0) && (currentNode == extractBitsFromLevel(mortonCodes[threadNum-1], nodeLevel)); // TODO WORK ON THIS
 
     // If the node being considered does not share a node with either the node on its left or right, it is already a leaf node
     // so we do not need to start another node.
-    if (!sameNodeAsLeft && !sameNodeAsRight) {
+    if (!sameParentNodeAsLeft && !sameParentNodeAsRight) {
         nodeFlags[threadNum] = 0;
     }
     else if (!sameNodeAsLeft) {
         nodeFlags[threadNum] = 1;
+    }
+    else {
+        nodeFlags[threadNum] = 0;
     }
 
 }
@@ -192,25 +200,6 @@ __global__ void updateTreeParticles(node* nodes, int levelStartIndex, int levelN
     }
     int starArrayBeginning = nodes[nodeIndex].firstParticleIndex;
     nodes[nodeIndex].particleCount = starArrayEnd - starArrayBeginning;
-
-
-    // ====================
-
-    int firstParticle = nodes[levelStartIndex + threadNum].firstParticleIndex;
-    int nextParticle = 0;
-
-    // Check if the 'firstParticle' is the last node in the array
-    if (threadNum == levelNodeCount - 1) {
-        nextParticle = starCount; // The last node contains all particles between the start of this node and the end of the array
-    }
-    // If 'firstParticle' is not the last node in the array, we find the index of the next node
-    else {
-        // The index position of the first particle in the next node
-        nextParticle = nodes[levelStartIndex + threadNum + 1].firstParticleIndex;
-        // The total particles in the node is just the difference between this and the first particle index of the node being checked
-    }
-
-    nodes[levelStartIndex + threadNum].particleCount = (nextParticle - firstParticle);
 }
 
 __global__ void createNodes(const uint64_t* mortonCodes, const uint32_t* flags,const uint32_t* previousFlags, const uint32_t* offsets, const uint32_t* offsetsPrev, node* nodes, int level, int arrayLevelOffset, int prevArrayLevelOffset, int starCount, int maxNodes) {
@@ -564,10 +553,8 @@ start at the root node, and traverse the tree in a depth first search until it e
 
 Actually scratch that, that is just wishful thinking. I do not believe myself capable of implementing that.
 
-
 I will grab a handful of 32 stars (equal to the warp size), and measure the distance between each star in the handful and the stars with index[threadNUM]. If all of them meet the approximation criteria it is applied,
 otherwise I will traverse the tree until it is met by all stars. This is to minimise thread divergence, which would massively slow down my program.
-
 */
 
 // Calculate the force acting on a given particle
