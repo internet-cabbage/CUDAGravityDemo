@@ -723,16 +723,17 @@ int main(void) {
     uint32_t* cpuInitIndices = (uint32_t*) calloc(starCount,sizeof(uint32_t));
     sorterPair* pairBuffer = (sorterPair*) calloc(starCount,sizeof(sorterPair));
     
-    CUDA_CHECK(cudaMemcpy(cpuInitAccelVals,cudaAccelerationVals,starCount*sizeof(float3),cudaMemcpyDeviceToHost));
-    CUDA_CHECK(cudaMemcpy(cpuInitIndices,state->indexOut,sizeof((state->indexOut)[0])*starCount,cudaMemcpyDeviceToHost));
+    //CUDA_CHECK(cudaMemcpy(cpuInitAccelVals,cudaAccelerationVals,starCount*sizeof(float3),cudaMemcpyDeviceToHost));
+    //CUDA_CHECK(cudaMemcpy(cpuInitIndices,state->indexOut,sizeof((state->indexOut)[0])*starCount,cudaMemcpyDeviceToHost));
 
     //qsort(pairBuffer,starCount,sizeof(sorterPair),keyValueSorter);
 
     // Assuming the galaxy is circularly symmetric:
     // a_c = v^2 / R
 
-    sVec3 galaxyCOM = parameters.galacticCentreLocation;
+    //sVec3 galaxyCOM = parameters.galacticCentreLocation;
 
+    /*
     for (int i = 0; i < starCount; i++) {
         // Calculate radial distance
         float dx = (pairBuffer[i]).positionVal->x - galaxyCOM.x; 
@@ -744,6 +745,7 @@ int main(void) {
         float3 accel = cpuInitAccelVals[i];
 
     }
+    */
 
     
 
