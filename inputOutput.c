@@ -14,11 +14,14 @@ void writeFrame(FILE* dataFile, sVec4* positionVals, size_t N, float *frameBuffe
 if value 1 = value 2, return value = 0
 if value 1 > value 2, return value > 0
 */
-int keyValueSorter(const sorterPair* pair1, const sorterPair* pair2) {
-    if (pair1->originalIndex < pair2->originalIndex) {
+int keyValueSorter(const void* pointer1, const void* pointer2) {
+    sorterPair* pair1 = (sorterPair*) pointer1;
+    sorterPair* pair2 = (sorterPair*) pointer2;
+
+    if (*(pair1->originalIndex) < *(pair2->originalIndex)) {
         return -1;
     }
-    else if (pair1->originalIndex > pair2->originalIndex) {
+    else if (*(pair1->originalIndex) > *(pair2->originalIndex)) {
         return +1;
     }
     else {
@@ -38,12 +41,12 @@ This function will sort the star data each frame such that it is constant across
 void writeOrderedFrame(FILE* datafile, float4* positionVals, uint32_t* originalIndex, size_t N, float* frameBuffer, sorterPair* pairBuffer) {
 
     // Input data into key value pair datastructure
-    for (int i = 0; i < N; i++) {
+    for (int i = 0; i < (int) N; i++) {
         pairBuffer[i].positionVal = &(positionVals[i]);
         pairBuffer[i].originalIndex = &(originalIndex[i]);
     }
     // Sort stars by index
-    qsort(pairBuffer,sizeof(sorterPair),N,keyValueSorter);
+    qsort(pairBuffer,N,sizeof(sorterPair),keyValueSorter);
 
     // Write into the framebuffer from the sorted pairs buffer
     for (int i = 0; i < (int) N; i++) {
@@ -68,6 +71,6 @@ void progressPrinter(int tSteps, int currentStep, int width, float timePerStep) 
     fprintf(stdout,"%.s", emptyBar);
 
     // Write filled bar
-    fprintf(stdout,"\r %5.2f%% [%.*s%.*s] tStep: %5.d / %d, stepTime (ms): %5.4f", percentageVal, filledWidth, filledBar, emptyPad, emptyBar, currentStep, tSteps, timePerStep);
+    fprintf(stdout,"\r %5.2f%% [%.*s%.*s] step: %5.d / %d, time (ms): %5.1f", percentageVal, filledWidth, filledBar, emptyPad, emptyBar, currentStep, tSteps, timePerStep);
     fflush(stdout);
 }

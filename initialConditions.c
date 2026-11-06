@@ -30,7 +30,7 @@ The equation I am sampling over is: P(R) = R exp(-a R)
 
 float randDecimal() {
     // A constant factor is added to the randomiser, so that 0.0 cannot be returned
-    float randVal = (float) ( rand() + 1.0f)/(RAND_MAX + 3.0f);
+    float randVal = (float) ( rand() + 1.0f)/(RAND_MAX + 100.0f);
     return randVal;
 }
 
@@ -243,7 +243,7 @@ void rotateVector(mat3 rotationMatrix, sVec3* vectorToRotate) {
     vectorToRotate->z = vecVals[2];
 }
 
-void generateLocalCoordsDisk(galaxyDiskParameters* parameters,float* massVals,float4* posMassVals, float3* velVals, int spawnNumber) {
+void generateLocalCoordsDisk(galaxyDiskParameters* parameters,float* massVals,float4* posMassVals, float3* velVals, int spawnNumber, int firstWriteIndex) {
 
     // Alpha is the rate at which the surface density decreases as a function of length
     float scaleThickness = parameters->scaleThickness;
@@ -275,21 +275,108 @@ void generateLocalCoordsDisk(galaxyDiskParameters* parameters,float* massVals,fl
         sVec3 vel;
         vel.x = - circularSpeed * sinA;
         vel.y = circularSpeed * cosA;
+        vel.z = 0.0f;
+        
+        /*
         // Z velocity distribution
+        // This is completely unscientific, just something I added to 
         float enclosedMass = galacticMassEnclosed(scaleLength,totalMass,rVal);
         vel.z = sampleVerticalSpeed(circularSpeed,0.2,enclosedMass,totalMass);
+        */
 
         // Rotate in the local frame
         rotateVector(rotateMatrix,&pos);
         rotateVector(rotateMatrix,&vel);
 
-        posMassVals[i].x = pos.x + positionOffset.x;
-        posMassVals[i].y = pos.y + positionOffset.y;
-        posMassVals[i].z = pos.z + positionOffset.z;
+        int writeIndex = firstWriteIndex + i;
+
+        posMassVals[writeIndex].x = pos.x + positionOffset.x;
+        posMassVals[writeIndex].y = pos.y + positionOffset.y;
+        posMassVals[writeIndex].z = pos.z + positionOffset.z;
+        posMassVals[writeIndex].w = massVals[writeIndex];
+
+        velVals[writeIndex].x = vel.x + velocityOffset.x;
+        velVals[writeIndex].y = vel.y + velocityOffset.y;
+        velVals[writeIndex].z = vel.z + velocityOffset.z;
+    }
+}
+
+
+// ========================================================================================
+// Sample Dark Matter Halo
+// ========================================================================================
+
+int calculateHaloNum(int N, float ratio) {
+    int haloCount = (int) (N * ratio);
+    return haloCount;
+}
+
+float4* sampleSphere(float scaleLength, int N) {
+    float* uniDist1 = (float*) calloc(N,sizeof(float));
+    float* uniDist2 = (float*) calloc(N,sizeof(float));
+    float* uniDist3 = (float*) calloc(N,sizeof(float));
+
+    float* polarAngle = (float*) calloc(N,sizeof(float));
+    float* azimuthalAngle = (float*) calloc(N,sizeof(float));
+    float* radialDist = (float*) calloc(N,sizeof(float));
+
+    float4* posMassVals = (float4*) calloc(N, sizeof(float4));
+
+    for (int i = 0; i < (int) N; i++) {
+        uniDist1[i] = randDecimal();
+        uniDist2[i] = randDecimal();
+        uniDist3[i] = randDecimal();
+    }
+
+    for (int j = 0; j < N; j++){
+        polarAngle[j] = 2 * GLM_PIf * uniDist1[j];
+        azimuthalAngle[j] = acosf(2 * uniDist2[j] - 1);
+        radialDist[j] = scaleLength * 5 * uniDist3[j];
+    }
+
+
+
+    // Convert spherical polars to cartesian coordinates
+
+    for (int c = 0; c < N; c++) {
+        float u = 2 * uniDist2[c] - 1;
+        posMassVals[c].x = radialDist[c] * sqrtf(1 - (u*u)) * cosf(polarAngle[c]);
+        posMassVals[c].y = radialDist[c] * sqrtf(1 - (u*u)) * sinf(polarAngle[c]);
+        posMassVals[c].z = radialDist[c] * u;
+        posMassVals[c].w = 0.0;
+
+        /*
+        posMassVals[c].x = radialDist[c] * cosf(azimuthalAngle[c]) * sinf(polarAngle[c]);
+        posMassVals[c].y = radialDist[c] * sinf(azimuthalAngle[c]) * sinf(polarAngle[c]);
+        posMassVals[c].z = radialDist[c] * cosf(polarAngle[c]);
+        posMassVals[c].w = 0.0;
+        */
+    }
+
+    free(uniDist1);
+    free(uniDist2);
+    free(uniDist3);
+
+    return posMassVals;
+}
+
+void generateDarkMatterHalo(galaxyDiskParameters* parameters, float* massVals, float4* posMassVals, float3* velVals, int spawnNumber, int firstWriteIndex) {
+    // Alpha is the rate at which the surface density decreases as a function of length
+    float scaleLength = parameters->scaleLength;
+
+    sVec3 positionOffset = parameters->galacticCentreLocation;
+    sVec3 velocityOffset = parameters->galacticNetVelocity;
+    
+    float4* haloVals = sampleSphere(scaleLength, spawnNumber);
+
+    for (int i = firstWriteIndex; i < spawnNumber + firstWriteIndex; i++) {
+        posMassVals[i].x = (haloVals[i-firstWriteIndex]).x + positionOffset.x;
+        posMassVals[i].y = (haloVals[i-firstWriteIndex]).y + positionOffset.y;
+        posMassVals[i].z = (haloVals[i-firstWriteIndex]).z + positionOffset.z;
         posMassVals[i].w = massVals[i];
 
-        velVals[i].x = vel.x + velocityOffset.x;
-        velVals[i].y = vel.y + velocityOffset.y;
-        velVals[i].z = vel.z + velocityOffset.z;
+        velVals[i].x = velocityOffset.x;
+        velVals[i].y = velocityOffset.y;
+        velVals[i].z = velocityOffset.z;
     }
 }

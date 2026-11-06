@@ -9,7 +9,7 @@
 do {                                                                \
     cudaError_t cudaErr = (call);                                   \
     if (cudaErr != cudaSuccess) {                                   \
-        printf("CUDA ERROR at: %s:%d\n",__FILE__,__LINE__);         \
+        printf("\nCUDA ERROR at: %s:%d\n",__FILE__,__LINE__);       \
         printf("%s\n",cudaGetErrorString(cudaErr));                 \
         fflush(stdout);                                             \
         exit(-1);                                                   \

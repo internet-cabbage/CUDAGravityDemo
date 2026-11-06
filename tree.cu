@@ -424,7 +424,7 @@ __global__ void localMinMaxFinder(const float4* __restrict__ posMassVals, unsign
     float3 upperVals = make_float3(-INFINITY,-INFINITY,-INFINITY);
 
     // Now perform the reduction
-    for (unsigned int i = exteriorID; i < N; i+=threadCount) {
+    for (unsigned int i = exteriorID; i < (int) N; i+=threadCount) {
         float4 localPos = posMassVals[i];
         lowerVals.x = fminf(lowerVals.x,localPos.x); upperVals.x = fmaxf(upperVals.x,localPos.x);
         lowerVals.y = fminf(lowerVals.y,localPos.y); upperVals.y = fmaxf(upperVals.y,localPos.y);
@@ -514,7 +514,7 @@ __device__ float calculateNodeSize(treeState* tree,int level) {
     float xyDif = abs(xSize - ySize);
     float xzDif = abs(xSize - zSize);
     float yzDif = abs(ySize - zSize);
-    /*
+    
     if (xyDif > 1.0 || xzDif > 1.0 || yzDif > 1.0) {
         printf("ERROR: Irregular bounding box size detected.\n");
     }

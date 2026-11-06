@@ -6,12 +6,10 @@
 #include "types.h"
 
 void writeFrame(FILE *dataFile, sVec4* positionVals, size_t N, float *frameBuffer);
+void writeOrderedFrame(FILE* datafile, float4* positionVals, uint32_t* originalIndex, size_t N, float* frameBuffer, sorterPair* pairBuffer);
 void progressPrinter(int tSteps, int currentStep, int width, float timePerStep);
 
-typedef struct {
-    float4* positionVal;
-    uint32_t* originalIndex;
-} sorterPair;
+int keyValueSorter(const void* pointer1, const void* pointer2);
 
 
 #endif

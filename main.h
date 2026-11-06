@@ -19,6 +19,7 @@ extern "C" {
 #include "units.h"
 #include "macros.h"
 #include "sys/sysinfo.h"
+#include "CPUTree.h"
 
 
 #define THREADCOARSENING 2

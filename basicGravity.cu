@@ -80,6 +80,7 @@ void createWorldBox(const float4* cudaPositionMassVals, const int starCount,
                          float3* cudaMinCorner, float3* cudaMaxCorner,
                          float3* cudaOutputMin, float3* cudaOutputMax,
                          worldBox* outputWorldBox) {
+                            
     float3 minCorner, maxCorner;
     localMinMaxFinder<<<BOXBLOCKS,BOXTHREADS>>>(cudaPositionMassVals,starCount,cudaMinCorner,cudaMaxCorner);
     globalMinMaxReducer<<<1,BOXTHREADS>>>(cudaMinCorner,cudaMaxCorner,BOXBLOCKS,cudaOutputMin,cudaOutputMax);
@@ -151,7 +152,7 @@ void buildTree(treeState* tree, float4** cudaPosMasVals, float3** cudaVelVals) {
     createWorldBox(*cudaPosMasVals,starCount,cudaMinCorner,cudaMaxCorner,cudaOutputMinCorner,cudaOutputMaxCorner,&rootBox);
 
     // Check if the rootbox has been initialised correctly
-    if (rootBox.scale == 0.0) {printf("ERROR: rootBox failed to initialise.\n"); exit(-1);}
+    if (rootBox.scale == 0.0) {printf("\nERROR: rootBox failed to initialise.\n"); exit(-1);}
 
 
     // Create root node;
@@ -245,7 +246,7 @@ void buildTree(treeState* tree, float4** cudaPosMasVals, float3** cudaVelVals) {
     tree->levelCount[0] = 1;
     //tree->deepestLevel = 0;
 
-    for (int level = 1; level < 21; level++) {
+    for (int level = 1; level <= 21; level++) {
         // Mark the index boundaries of the star array at which the nodes start
         // i.e. writes the flags array
         identifyNodesAtLevel<<<treeBlocks,THREADPERBLOCK>>>(cudaMortonCodesOut,level,starCount,flags);
@@ -267,20 +268,26 @@ void buildTree(treeState* tree, float4** cudaPosMasVals, float3** cudaVelVals) {
         CUDA_CHECK(cudaMemcpy(&lastFlagVal,&(flags[starCount-1]),sizeof(uint32_t),cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaMemcpy(&lastOffsetVal,&(offsets[starCount-1]),sizeof(uint32_t),cudaMemcpyDeviceToHost));
         int nodeCount = lastFlagVal + lastOffsetVal;
+
+        /* nodeCount tracks the number of nodes which are present in this level of the tree. Leaf nodes do not produce nodes at lower levels in the tree
+        so they are not counted by nodeCount. Therefore when every node has been put in a leaf node, there will be no nodes at that level of the tree. So we can
+        halt building the tree.
+        */
+        if (nodeCount == 0) {
+            tree->levelCount[level]=nodeCount;
+            tree->levelOffsets[level] = arrayLevelOffset;
+            break;}
+        
+        // Check for a tree overflow
+        if (nodeCount + arrayLevelOffset > maxNodes) {printf("ERROR: Node array overflow at level: %d", level); exit(-1);}
         
         // Count how many particles are in each node, and write it to the nodes
         updateTreeParticles<<<treeBlocks,THREADPERBLOCK>>>(CUDANodes,arrayLevelOffset,nodeCount,starCount);
 
 
-        // Check for a tree overflow
-        if (nodeCount + arrayLevelOffset > maxNodes) {printf("ERROR: Node array overflow at level: %d", level); exit(-1);}
-        
-        // Check if the tree is complete, and if so we can stop building the tree (as you know, we have kind of done it already)
-        if (nodeCount == starCount) {
-            tree->deepestLevel++;
-            tree->levelCount[level]=nodeCount;
-            tree->levelOffsets[level] = arrayLevelOffset;
-            break;}
+
+
+
 
 
         
@@ -335,36 +342,6 @@ sVec3* randomGen(int lower, int upper, size_t N) {
     return address;
 }
 
-
-
-
-// Symplectic euler, update velocity then position
-__global__ void integrateStep( float4 (*positionArray),float3 (*velocityArray),float3 (*accelArray),int starCount, float dt){
-    int threadNum = blockDim.x * blockIdx.x + threadIdx.x;
-    if (threadNum >= starCount) {
-        return;
-        // This means an out of bounds thread tried to run
-    }
-    
-    /*
-    // Output star 1.s parameters
-    if (threadNum == 1) {
-        printf("\nAcceleration: (%f,%f,%f)\n",accelArray[0].x,accelArray[0].y,accelArray[0].z);
-        printf("Velocity: (%f,%f,%f\n",velocityArray[0].x,velocityArray[0].y,velocityArray[0].z);
-        printf("Position: (%f,%f,%f\n\n",positionArray[0].x,positionArray[0].y,positionArray[0].z);
-    }
-    */
-    
-    velocityArray[threadNum].x += accelArray[threadNum].x * dt;
-    positionArray[threadNum].x += velocityArray[threadNum].x * dt;
-
-    velocityArray[threadNum].y += accelArray[threadNum].y * dt;
-    positionArray[threadNum].y += velocityArray[threadNum].y * dt;
-
-    velocityArray[threadNum].z += accelArray[threadNum].z * dt;
-    positionArray[threadNum].z += velocityArray[threadNum].z * dt;
-
-}
 
 __global__ void threadPrinter(int* nThreads) {
     int threadNum = blockIdx.x * blockDim.x + threadIdx.x;
@@ -483,8 +460,10 @@ int main(void) {
     srand(time(0));
     //int cpuNThreads = 256;
     int tSteps = 1000;
-    int starCount = 20000;
-    int framesPerWrite = 1;
+    int starCount = 100000; 
+    int framesPerWrite = 5;
+    float dt = 0.08;
+    float antiSingularity = 0.02; // Can never be zero, otherwise an optimisation assumption breaks and the code will calculate NaN for acceleration
 
     // Size of star box
 
@@ -508,9 +487,6 @@ int main(void) {
     unsigned long int NSquared = ((unsigned long int)starCount*(unsigned long int)starCount);
     printf("\nInteractions total: %lu\n\n", (long int)tSteps * NSquared);
 
-    // Put parameters and constants in array;
-    float dt = 0.04;
-    float antiSingularity = 0.2; // Can never be zero, otherwise an optimisation assumption breaks and the code will calculate NaN for acceleration
 
     // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
     // Define arrays on CPU
@@ -552,7 +528,8 @@ int main(void) {
     /*
      Since GPU's are optimised to load 16 bytes of memory at a go, I pack the mass with the position to hopefully take advantage of this
     */
-    float4* cpuPositionMassVals = (float4*)calloc(paddedStarCount,sizeof(float4));
+    float4* cpuPositionMassVals = (float4*)     calloc(paddedStarCount,sizeof(float4));
+    uint32_t* cpuOriginalIndexes = (uint32_t*)  calloc(starCount,sizeof(uint32_t));
     // Generates position data
     //sVec3* cpuPositionVals = (sVec3*)calloc(cpuNThreadsVal, sizeof(sVec3));
 
@@ -567,9 +544,7 @@ int main(void) {
     parameters.scaleThickness = (float) 0.3f;
     parameters.totalDiskMass = (float) totalMass;
 
-    generateLocalCoordsDisk(&parameters,cpuMassVals,cpuPositionMassVals,cpuVelocityVals,starCount);
 
-    free(cpuMassVals);
 
 
     // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
@@ -625,10 +600,7 @@ int main(void) {
 
     printf("Memory transferred to GPU\n");
 
-    // Transfer arrays
-    CUDA_CHECK(cudaMemcpy(cudaPositionMassVals,cpuPositionMassVals,posSize,cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(cudaVelocityVals,cpuVelocityVals,velSize,cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(cudaAccelerationVals,cpuAccelerationVals,accelSize,cudaMemcpyHostToDevice));
+
 
     // =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
     // Core logic
@@ -664,7 +636,9 @@ int main(void) {
 
     printf("Size of colour vals: %zu\n\n\n", sizeof(colourVals));
 
+
     float* frameBuffer = (float*) calloc(starCount,sizeof(sVec3));
+    sorterPair* sortBuffer = (sorterPair*) calloc(starCount, sizeof(sorterPair));
     
     // Check if pointer is null
     if (frameBuffer == NULL) {
@@ -698,6 +672,84 @@ int main(void) {
 
     progressPrinter(tSteps,0,40,0);
 
+
+
+
+    /*
+    Initialisation process:
+        1) Spawn stars in any arbitrary shape I want 
+        2) Build new tree based on star positions
+            a) Then traverse tree to calculate force on each star
+            b) Return the forces array to the CPU
+        3) Re-order the star's array so that they have returned to their original index positions.
+        4) Compute the circular velocity of star from its acceleration
+        5) Write their velocities to their initial conditions
+    */
+    
+
+    // ======================================================================
+    // 1 Spawn stars in the correct shape
+    // ======================================================================
+
+    int haloCount = calculateHaloNum(starCount,0.2);
+
+    generateLocalCoordsDisk(&parameters,cpuMassVals,cpuPositionMassVals,cpuVelocityVals,starCount-haloCount,0);
+    generateDarkMatterHalo(&parameters,cpuMassVals,cpuPositionMassVals,cpuVelocityVals,haloCount,starCount-haloCount);
+
+    free(cpuMassVals);
+
+    // Transfer arrays
+    CUDA_CHECK(cudaMemcpy(cudaPositionMassVals,cpuPositionMassVals,posSize,cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(cudaVelocityVals,cpuVelocityVals,velSize,cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(cudaAccelerationVals,cpuAccelerationVals,accelSize,cudaMemcpyHostToDevice));
+
+    treeState* state = (treeState*) calloc(1,sizeof(treeState));
+    
+
+    initialiseTree(state,starCount,paddedStarCount,integrateBlocks);
+
+    // ======================================================================
+    // 2 Build the CPU tree keeping track of the GPU data structure
+    // ======================================================================
+
+    buildTree(state,&cudaPositionMassVals,&cudaAccelerationVals);
+
+    // a) Traverse tree to calculate acceleration
+    calculateAcceleration<<<accelerationBlocks,WARPTHREADS>>>(cudaPositionMassVals,*state,cudaAccelerationVals,antiSingularity*antiSingularity,G,theta,starCount);
+
+    // b) return acceleration values to CPU
+
+    float3* cpuInitAccelVals = (float3*) calloc(starCount,sizeof(float3));
+    uint32_t* cpuInitIndices = (uint32_t*) calloc(starCount,sizeof(uint32_t));
+    sorterPair* pairBuffer = (sorterPair*) calloc(starCount,sizeof(sorterPair));
+    
+    CUDA_CHECK(cudaMemcpy(cpuInitAccelVals,cudaAccelerationVals,starCount*sizeof(float3),cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(cpuInitIndices,state->indexOut,sizeof((state->indexOut)[0])*starCount,cudaMemcpyDeviceToHost));
+
+    //qsort(pairBuffer,starCount,sizeof(sorterPair),keyValueSorter);
+
+    // Assuming the galaxy is circularly symmetric:
+    // a_c = v^2 / R
+
+    sVec3 galaxyCOM = parameters.galacticCentreLocation;
+
+    for (int i = 0; i < starCount; i++) {
+        // Calculate radial distance
+        float dx = (pairBuffer[i]).positionVal->x - galaxyCOM.x; 
+        float dy = (pairBuffer[i]).positionVal->y - galaxyCOM.y; 
+        float dz = (pairBuffer[i]).positionVal->z - galaxyCOM.z; 
+
+        float distance = sqrtf((dx*dx)+(dy*dy)+(dz*dz));
+
+        float3 accel = cpuInitAccelVals[i];
+
+    }
+
+    
+
+
+    // Block calculator:
+
     /*
     Main loop process:
         1) Start time profiling
@@ -710,16 +762,6 @@ int main(void) {
         7) Repeat
     */
 
-    treeState* state = (treeState*) calloc(1,sizeof(treeState));
-    
-
-    initialiseTree(state,starCount,paddedStarCount,integrateBlocks);
-
-
-    // Block calculator:
-
-
-
     for (int i = 0; i < tSteps; i++) {
 
         // PROCESS 1
@@ -727,7 +769,7 @@ int main(void) {
         
         // PROCESS 2
         // Host side function
-        buildTree(state,&cudaPositionMassVals,&cudaVelocityVals); // CLEARED IN DEBUG INVESTIGATION
+        buildTree(state,&cudaPositionMassVals,&cudaVelocityVals);
 
         // PROCESS 3
         // GPU side function
@@ -743,12 +785,18 @@ int main(void) {
 
         cudaEventRecord(mathEndTime,0);
         cudaDeviceSynchronize();
+
+        CUDA_CHECK(cudaEventElapsedTime(&timePerStep,mathStartTime,mathEndTime));
+        progressPrinter(tSteps,i,40,timePerStep);
         if (i % framesPerWrite == 0) {       
             //printf("\n\n WriteFrame code hit\n\n"); 
-            CUDA_CHECK(cudaEventElapsedTime(&timePerStep,mathStartTime,mathEndTime));
-            cudaMemcpy(cpuPositionMassVals,cudaPositionMassVals,unpaddedPosSize,cudaMemcpyDeviceToHost);
-            writeFrame(fptr,(sVec4*)cpuPositionMassVals,starCount,frameBuffer);
-            progressPrinter(tSteps,i,40,timePerStep);
+            //CUDA_CHECK(cudaEventElapsedTime(&timePerStep,mathStartTime,mathEndTime));
+            CUDA_CHECK(cudaMemcpy(cpuPositionMassVals,cudaPositionMassVals,unpaddedPosSize,cudaMemcpyDeviceToHost));
+            CUDA_CHECK(cudaMemcpy(cpuOriginalIndexes,state->indexOut,sizeof((state->indexOut)[0])*starCount,cudaMemcpyDeviceToHost));
+
+            //writeFrame(fptr,(sVec4*)cpuPositionMassVals,starCount,frameBuffer);
+            writeOrderedFrame(fptr,cpuPositionMassVals,cpuOriginalIndexes,starCount,frameBuffer,sortBuffer);
+            //progressPrinter(tSteps,i,40,timePerStep);
         }
     }
     cudaEventRecord(finishTime,0);

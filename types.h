@@ -99,5 +99,9 @@ typedef struct {
     sVec3 galacticNetVelocity;
 } galaxyDiskParameters;
 
+typedef struct {
+    float4* positionVal;
+    uint32_t* originalIndex;
+} sorterPair;
 
 #endif

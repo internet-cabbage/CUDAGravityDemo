@@ -12,7 +12,10 @@
 
 
 
-void generateLocalCoordsDisk(galaxyDiskParameters* parameters,float* massVals,float4* posMassVals, float3* velVals, int spawnNumber) ;
+void generateLocalCoordsDisk(galaxyDiskParameters* parameters,float* massVals,float4* posMassVals, float3* velVals, int spawnNumber, int firstWriteIndex);
 
+void generateDarkMatterHalo(galaxyDiskParameters* parameters, float* massVals, float4* posMassVals, float3* velVals, int spawnNumber, int firstWriteIndex);
+
+int calculateHaloNum(int N, float ratio);
 
 #endif
